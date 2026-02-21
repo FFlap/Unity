@@ -4,6 +4,7 @@ import {
   AUDIO_RATE_STORAGE_KEY,
   COLOR_BLIND_MODE_STORAGE_KEY,
   FORCED_FONT_STORAGE_KEY,
+  REDUCE_MOTION_STORAGE_KEY,
   normalizeForcedFont,
   type ForcedFontOption,
 } from '@/lib/storage';
@@ -11,12 +12,25 @@ import {
 const STYLE_ID = 'cred-selection-actions-style';
 const PAGE_STYLE_ID = 'cred-page-colorblind-style';
 const PAGE_FONT_STYLE_ID = 'cred-page-forced-font-style';
+const PAGE_REDUCED_MOTION_STYLE_ID = 'cred-page-reduced-motion-style';
 const ACTION_BAR_ID = 'cred-selection-actions';
 const CARD_ID = 'cred-selection-result-card';
 const AUDIO_FOLLOW_PANEL_ID = 'unity-audio-follow-panel';
 const UI_ATTR = 'data-cred-selection-ui';
+const MOTION_EXEMPT_ATTR = 'data-unity-motion-exempt';
 const PAGE_MODE_ATTR = 'data-unity-color-blind-page';
 const PAGE_FONT_ATTR = 'data-unity-forced-font';
+const PAGE_REDUCED_MOTION_ATTR = 'data-unity-reduced-motion';
+const GIF_FROZEN_ATTR = 'data-unity-rm-gif-frozen';
+const GIF_FROZEN_SRC_ATTR = 'data-unity-rm-gif-frozen-src';
+const GIF_FROZEN_PENDING_SRC = '__unity-pending-freeze__';
+const GIF_PENDING_ATTR = 'data-unity-rm-gif-pending';
+const GIF_ORIGINAL_ATTR = 'data-unity-rm-gif-original';
+const CANVAS_FROZEN_ATTR = 'data-unity-rm-canvas-frozen';
+const CANVAS_ORIGINAL_VISIBILITY_ATTR = 'data-unity-rm-canvas-original-visibility';
+const CANVAS_PLACEHOLDER_ID_ATTR = 'data-unity-rm-canvas-placeholder-id';
+const CANVAS_PLACEHOLDER_ATTR = 'data-unity-rm-canvas-placeholder';
+const CANVAS_PLACEHOLDER_ID_PREFIX = 'unity-rm-canvas-placeholder-';
 const SHADOW_FONT_STYLE_ATTR = 'data-unity-forced-font-shadow-style';
 const ATTACH_SHADOW_HOOK_ATTR = 'data-unity-attach-shadow-hook';
 const MIN_SELECTION_CHARS = 16;
@@ -24,6 +38,7 @@ const POINTER_ANCHOR_MAX_AGE_MS = 2_500;
 const AUDIO_PAGE_FOLLOW_PROGRESS_LAG = 0.07;
 const AUDIO_PAGE_FOLLOW_LINE_ADVANCE_HYSTERESIS = 0.38;
 const AUDIO_PAGE_FOLLOW_MIN_ADVANCE_MS = 320;
+const REDUCE_MOTION_RESCAN_INTERVAL_MS = 900;
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
 
@@ -628,12 +643,56 @@ function installPageColorBlindStyles() {
   document.documentElement.appendChild(style);
 }
 
+function installPageReducedMotionStyles() {
+  if (document.getElementById(PAGE_REDUCED_MOTION_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = PAGE_REDUCED_MOTION_STYLE_ID;
+  style.textContent = `
+    html[${PAGE_REDUCED_MOTION_ATTR}="true"] {
+      scroll-behavior: auto !important;
+    }
+
+    html[${PAGE_REDUCED_MOTION_ATTR}="true"] *:not(
+      [${MOTION_EXEMPT_ATTR}="true"],
+      [${MOTION_EXEMPT_ATTR}="true"] *,
+      [${UI_ATTR}="true"],
+      [${UI_ATTR}="true"] *
+    ),
+    html[${PAGE_REDUCED_MOTION_ATTR}="true"] *:not(
+      [${MOTION_EXEMPT_ATTR}="true"],
+      [${MOTION_EXEMPT_ATTR}="true"] *,
+      [${UI_ATTR}="true"],
+      [${UI_ATTR}="true"] *
+    )::before,
+    html[${PAGE_REDUCED_MOTION_ATTR}="true"] *:not(
+      [${MOTION_EXEMPT_ATTR}="true"],
+      [${MOTION_EXEMPT_ATTR}="true"] *,
+      [${UI_ATTR}="true"],
+      [${UI_ATTR}="true"] *
+    )::after {
+      animation: none !important;
+      animation-play-state: paused !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
+  `;
+  document.documentElement.appendChild(style);
+}
+
 function applyPageColorBlindMode(enabled: boolean) {
   if (enabled) {
     document.documentElement.setAttribute(PAGE_MODE_ATTR, 'true');
     return;
   }
   document.documentElement.removeAttribute(PAGE_MODE_ATTR);
+}
+
+function applyPageReducedMotionMode(enabled: boolean) {
+  if (enabled) {
+    document.documentElement.setAttribute(PAGE_REDUCED_MOTION_ATTR, 'true');
+    return;
+  }
+  document.documentElement.removeAttribute(PAGE_REDUCED_MOTION_ATTR);
 }
 
 function getForcedFontFamily(forcedFont: ForcedFontOption): string | null {
@@ -871,6 +930,7 @@ function createActionBar(
   const root = document.createElement('div');
   root.id = ACTION_BAR_ID;
   root.setAttribute(UI_ATTR, 'true');
+  root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
   root.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
   root.innerHTML = `
     <button type="button" class="cred-action-btn" data-action="simplify">${ACTION_CONFIG.simplify.label}</button>
@@ -908,6 +968,7 @@ function createCard(onClose: () => void, colorBlindModeEnabled: boolean): HTMLEl
   card.id = CARD_ID;
   card.setAttribute('data-state', 'idle');
   card.setAttribute(UI_ATTR, 'true');
+  card.setAttribute(MOTION_EXEMPT_ATTR, 'true');
   card.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
   card.innerHTML = `
     <div class="cred-selection-head">
@@ -989,6 +1050,7 @@ export default defineContentScript({
     installAttachShadowHook();
     installStyles();
     installPageColorBlindStyles();
+    installPageReducedMotionStyles();
     installForcedFontStyles();
 
     let activeSelection: SelectionSnapshot | null = null;
@@ -999,6 +1061,7 @@ export default defineContentScript({
     let pointerSelectionInProgress = false;
     let lastPointerAnchor: PointerAnchor | null = null;
     let colorBlindModeEnabled = false;
+    let reduceMotionEnabled = false;
     let forcedFont: ForcedFontOption = 'none';
     let audioRate = 1;
     let audioFollowModeEnabled = false;
@@ -1026,7 +1089,10 @@ export default defineContentScript({
     let audioLastPageLineChangeAt = 0;
     let audioLastAutoScrollAt = 0;
     let forcedFontObserver: MutationObserver | null = null;
+    let reduceMotionGifObserver: MutationObserver | null = null;
     let forcedFontRescanInterval: number | null = null;
+    let reduceMotionRescanInterval: number | null = null;
+    let canvasPlaceholderCounter = 0;
 
     const applyColorBlindModeToUi = () => {
       if (actionBar) {
@@ -1081,6 +1147,510 @@ export default defineContentScript({
         return;
       }
       stopForcedFontRescanLoop();
+    };
+
+    const isMotionExemptNode = (node: Node | null): boolean => {
+      const element = node instanceof Element ? node : node?.parentElement ?? null;
+      return Boolean(element?.closest(`[${MOTION_EXEMPT_ATTR}="true"],[${UI_ATTR}="true"]`));
+    };
+
+    const setAttributeNullable = (element: Element, name: string, value: string | null) => {
+      if (value === null) {
+        element.removeAttribute(name);
+        return;
+      }
+      element.setAttribute(name, value);
+    };
+
+    type FrozenImageState = {
+      src: string | null;
+      srcset: string | null;
+      sizes: string | null;
+      inlineVisibility: string;
+      pictureSources?: Array<{ srcset: string | null; sizes: string | null }>;
+    };
+
+    const isGifUrl = (value: string | null | undefined): boolean => {
+      if (!value) return false;
+      const trimmed = value.trim();
+      if (!trimmed) return false;
+      if (/^data:image\/gif/i.test(trimmed)) return true;
+      return /\.gif(?:[?#].*)?$/i.test(trimmed);
+    };
+
+    const isLikelyAnimatedImageUrl = (value: string | null | undefined): boolean => {
+      if (!value) return false;
+      const trimmed = value.trim();
+      if (!trimmed) return false;
+      if (isGifUrl(trimmed)) return true;
+      return /\/\/media\d*\.giphy\.com\/media\/.+\.webp(?:[?#].*)?$/i.test(trimmed);
+    };
+
+    const srcsetContainsAnimatedCandidate = (srcset: string | null): boolean => {
+      if (!srcset) return false;
+      const candidates = srcset
+        .split(',')
+        .map((item) => item.trim().split(/\s+/)[0])
+        .filter(Boolean);
+      for (const candidate of candidates) {
+        if (isLikelyAnimatedImageUrl(candidate)) return true;
+      }
+      return false;
+    };
+
+    const isGifImage = (image: HTMLImageElement): boolean => {
+      if (isLikelyAnimatedImageUrl(image.currentSrc)) return true;
+      if (isLikelyAnimatedImageUrl(image.getAttribute('src'))) return true;
+      if (isLikelyAnimatedImageUrl(image.src)) return true;
+      if (srcsetContainsAnimatedCandidate(image.getAttribute('srcset'))) return true;
+      const picture = image.closest('picture');
+      if (picture) {
+        const sources = Array.from(picture.querySelectorAll<HTMLSourceElement>('source'));
+        for (const source of sources) {
+          if (srcsetContainsAnimatedCandidate(source.getAttribute('srcset'))) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    const buildFrozenImageState = (image: HTMLImageElement): FrozenImageState => {
+      const picture = image.closest('picture');
+      const pictureSources =
+        picture
+          ? Array.from(picture.querySelectorAll<HTMLSourceElement>('source')).map((source) => ({
+              srcset: source.getAttribute('srcset'),
+              sizes: source.getAttribute('sizes'),
+            }))
+          : undefined;
+
+      return {
+        src: image.getAttribute('src'),
+        srcset: image.getAttribute('srcset'),
+        sizes: image.getAttribute('sizes'),
+        inlineVisibility: image.style.visibility,
+        pictureSources,
+      };
+    };
+
+    const getImageSourceStateKey = (image: HTMLImageElement): string =>
+      JSON.stringify({
+        srcAttr: image.getAttribute('src') ?? '',
+        srcsetAttr: image.getAttribute('srcset') ?? '',
+        currentSrc: image.currentSrc ?? '',
+      });
+
+    const freezeImageSourceSelection = (image: HTMLImageElement) => {
+      const picture = image.closest('picture');
+      if (picture) {
+        const sources = Array.from(picture.querySelectorAll<HTMLSourceElement>('source'));
+        for (const source of sources) {
+          source.removeAttribute('srcset');
+          source.removeAttribute('sizes');
+        }
+      }
+      image.removeAttribute('srcset');
+      image.removeAttribute('sizes');
+    };
+
+    const restoreGifImage = (image: HTMLImageElement) => {
+      const serialized = image.getAttribute(GIF_ORIGINAL_ATTR);
+      if (!serialized) {
+        image.removeAttribute(GIF_FROZEN_ATTR);
+        image.removeAttribute(GIF_FROZEN_SRC_ATTR);
+        image.removeAttribute(GIF_PENDING_ATTR);
+        return;
+      }
+
+      try {
+        const original = JSON.parse(serialized) as {
+          src: string | null;
+          srcset: string | null;
+          sizes: string | null;
+          inlineVisibility?: string;
+          pictureSources?: Array<{ srcset: string | null; sizes: string | null }>;
+        };
+        const picture = image.closest('picture');
+        if (picture && Array.isArray(original.pictureSources)) {
+          const sources = Array.from(picture.querySelectorAll<HTMLSourceElement>('source'));
+          for (let index = 0; index < sources.length; index += 1) {
+            const source = sources[index];
+            const values = original.pictureSources[index] ?? { srcset: null, sizes: null };
+            setAttributeNullable(source, 'srcset', values.srcset);
+            setAttributeNullable(source, 'sizes', values.sizes);
+          }
+        }
+        setAttributeNullable(image, 'srcset', original.srcset);
+        setAttributeNullable(image, 'sizes', original.sizes);
+        setAttributeNullable(image, 'src', original.src);
+        image.style.visibility = original.inlineVisibility ?? '';
+      } catch {
+        // Ignore malformed saved payloads.
+      } finally {
+        image.removeAttribute(GIF_ORIGINAL_ATTR);
+        image.removeAttribute(GIF_FROZEN_ATTR);
+        image.removeAttribute(GIF_FROZEN_SRC_ATTR);
+        image.removeAttribute(GIF_PENDING_ATTR);
+      }
+    };
+
+    const extractSrcsetUrls = (srcset: string | null): string[] => {
+      if (!srcset) return [];
+      return srcset
+        .split(',')
+        .map((item) => item.trim().split(/\s+/)[0])
+        .filter(Boolean);
+    };
+
+    const appendStillUrlCandidates = (sourceUrl: string, targets: Set<string>) => {
+      const value = sourceUrl.trim();
+      if (!value || /^data:/i.test(value)) return;
+
+      const addIfChanged = (candidate: string) => {
+        if (candidate && candidate !== value) targets.add(candidate);
+      };
+
+      if (/\.gif(?:[?#].*)?$/i.test(value)) {
+        addIfChanged(value.replace(/\.gif(?:([?#].*)?)$/i, '_s.gif$1'));
+      }
+      if (/\.webp(?:[?#].*)?$/i.test(value)) {
+        addIfChanged(value.replace(/\.webp(?:([?#].*)?)$/i, '_s.webp$1'));
+        addIfChanged(value.replace(/\.webp(?:([?#].*)?)$/i, '_s.gif$1'));
+      }
+      addIfChanged(value.replace(/\/giphy\.webp(?:([?#].*)?)$/i, '/giphy_s.gif$1'));
+      addIfChanged(value.replace(/\/giphy\.gif(?:([?#].*)?)$/i, '/giphy_s.gif$1'));
+      addIfChanged(value.replace(/\/200\.webp(?:([?#].*)?)$/i, '/200_s.gif$1'));
+      addIfChanged(value.replace(/\/200\.gif(?:([?#].*)?)$/i, '/200_s.gif$1'));
+      addIfChanged(value.replace(/\/200w\.webp(?:([?#].*)?)$/i, '/200w_s.gif$1'));
+      addIfChanged(value.replace(/\/200w\.gif(?:([?#].*)?)$/i, '/200w_s.gif$1'));
+    };
+
+    const buildStillImageCandidates = (image: HTMLImageElement): string[] => {
+      const urls = new Set<string>();
+      const directCandidates = [
+        image.currentSrc,
+        image.src,
+        image.getAttribute('src'),
+      ];
+      for (const candidate of directCandidates) {
+        if (candidate) appendStillUrlCandidates(candidate, urls);
+      }
+
+      const srcsetCandidates = [
+        ...extractSrcsetUrls(image.getAttribute('srcset')),
+      ];
+      const picture = image.closest('picture');
+      if (picture) {
+        const sources = Array.from(picture.querySelectorAll<HTMLSourceElement>('source'));
+        for (const source of sources) {
+          srcsetCandidates.push(...extractSrcsetUrls(source.getAttribute('srcset')));
+        }
+      }
+      for (const srcsetCandidate of srcsetCandidates) {
+        appendStillUrlCandidates(srcsetCandidate, urls);
+      }
+
+      return Array.from(urls);
+    };
+
+    const resolveStillImageCandidate = async (candidates: string[]): Promise<string | null> => {
+      for (const candidate of candidates) {
+        const ok = await new Promise<boolean>((resolve) => {
+          const probe = new Image();
+          probe.onload = () => resolve(true);
+          probe.onerror = () => resolve(false);
+          probe.src = candidate;
+        });
+        if (ok) return candidate;
+      }
+      return null;
+    };
+
+    const applyStillUrlFallback = (image: HTMLImageElement, original: FrozenImageState): boolean => {
+      const candidates = buildStillImageCandidates(image);
+      if (candidates.length === 0) return false;
+      image.setAttribute(GIF_PENDING_ATTR, 'true');
+
+      void resolveStillImageCandidate(candidates)
+        .then((candidate) => {
+          if (!reduceMotionEnabled || !image.isConnected || isMotionExemptNode(image)) {
+            image.removeAttribute(GIF_PENDING_ATTR);
+            return;
+          }
+          if (!candidate) {
+            image.removeAttribute(GIF_PENDING_ATTR);
+            return;
+          }
+
+          image.setAttribute(GIF_ORIGINAL_ATTR, JSON.stringify(original));
+          image.setAttribute(GIF_FROZEN_SRC_ATTR, GIF_FROZEN_PENDING_SRC);
+          freezeImageSourceSelection(image);
+          image.src = candidate;
+          image.setAttribute(GIF_FROZEN_ATTR, 'true');
+          image.setAttribute(GIF_FROZEN_SRC_ATTR, getImageSourceStateKey(image));
+          image.removeAttribute(GIF_PENDING_ATTR);
+        })
+        .catch(() => {
+          image.removeAttribute(GIF_PENDING_ATTR);
+        });
+      return true;
+    };
+
+    const freezeGifImage = (image: HTMLImageElement) => {
+      if (isMotionExemptNode(image)) return;
+      if (!isGifImage(image)) return;
+      if (image.getAttribute(GIF_FROZEN_ATTR) === 'true') {
+        const expectedFrozenSrc = image.getAttribute(GIF_FROZEN_SRC_ATTR);
+        const currentSrc = getImageSourceStateKey(image);
+        if (!expectedFrozenSrc || expectedFrozenSrc === GIF_FROZEN_PENDING_SRC) return;
+        if (expectedFrozenSrc && currentSrc === expectedFrozenSrc) return;
+        // Virtualized lists can recycle nodes and rewrite src/srcset while keeping custom attrs.
+        image.removeAttribute(GIF_ORIGINAL_ATTR);
+        image.removeAttribute(GIF_FROZEN_ATTR);
+        image.removeAttribute(GIF_FROZEN_SRC_ATTR);
+      }
+      if (image.getAttribute(GIF_PENDING_ATTR) === 'true') {
+        if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+          return;
+        }
+        image.removeAttribute(GIF_PENDING_ATTR);
+      }
+
+      if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        image.setAttribute(GIF_PENDING_ATTR, 'true');
+        image.addEventListener(
+          'load',
+          () => {
+            image.removeAttribute(GIF_PENDING_ATTR);
+            if (!reduceMotionEnabled) return;
+            freezeGifImage(image);
+          },
+          { once: true },
+        );
+        return;
+      }
+
+      const original = buildFrozenImageState(image);
+      let frozenSrc: string | null = null;
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, image.naturalWidth);
+        canvas.height = Math.max(1, image.naturalHeight);
+        const context = canvas.getContext('2d');
+        if (!context) return;
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        frozenSrc = canvas.toDataURL('image/png');
+      } catch {
+        frozenSrc = null;
+      }
+
+      if (!frozenSrc) {
+        void applyStillUrlFallback(image, original);
+        return;
+      }
+
+      image.setAttribute(GIF_ORIGINAL_ATTR, JSON.stringify(original));
+      image.setAttribute(GIF_FROZEN_ATTR, 'true');
+      image.setAttribute(GIF_FROZEN_SRC_ATTR, GIF_FROZEN_PENDING_SRC);
+      image.removeAttribute(GIF_PENDING_ATTR);
+      freezeImageSourceSelection(image);
+      image.src = frozenSrc;
+      image.setAttribute(GIF_FROZEN_SRC_ATTR, getImageSourceStateKey(image));
+    };
+
+    const freezeGifImagesInNode = (node: Node) => {
+      if (node instanceof HTMLImageElement) {
+        freezeGifImage(node);
+      }
+      if (node instanceof HTMLSourceElement) {
+        const picture = node.closest('picture');
+        const image = picture?.querySelector<HTMLImageElement>('img');
+        if (image) {
+          freezeGifImage(image);
+        }
+      }
+      if (!(node instanceof Element || node instanceof Document || node instanceof DocumentFragment)) {
+        return;
+      }
+      const root = node as ParentNode;
+      const images = Array.from(root.querySelectorAll<HTMLImageElement>('img'));
+      for (const image of images) {
+        freezeGifImage(image);
+      }
+    };
+
+    const freezeAllGifImages = () => {
+      freezeGifImagesInNode(document.documentElement);
+    };
+
+    const unfreezeAllGifImages = () => {
+      const images = Array.from(document.querySelectorAll<HTMLImageElement>(`img[${GIF_FROZEN_ATTR}="true"]`));
+      for (const image of images) {
+        restoreGifImage(image);
+      }
+      const pendingImages = Array.from(document.querySelectorAll<HTMLImageElement>(`img[${GIF_PENDING_ATTR}="true"]`));
+      for (const image of pendingImages) {
+        image.removeAttribute(GIF_PENDING_ATTR);
+      }
+    };
+
+    const freezeCanvasElement = (canvas: HTMLCanvasElement) => {
+      if (isMotionExemptNode(canvas)) return;
+      if (canvas.getAttribute(CANVAS_FROZEN_ATTR) === 'true') return;
+
+      const originalVisibility = canvas.style.visibility;
+      canvas.setAttribute(CANVAS_ORIGINAL_VISIBILITY_ATTR, originalVisibility);
+      canvas.setAttribute(CANVAS_FROZEN_ATTR, 'true');
+
+      let snapshot: string | null = null;
+      try {
+        snapshot = canvas.toDataURL('image/png');
+      } catch {
+        snapshot = null;
+      }
+
+      if (snapshot) {
+        const placeholder = document.createElement('img');
+        const placeholderId = `${CANVAS_PLACEHOLDER_ID_PREFIX}${canvasPlaceholderCounter + 1}`;
+        canvasPlaceholderCounter += 1;
+        placeholder.id = placeholderId;
+        placeholder.alt = '';
+        placeholder.src = snapshot;
+        placeholder.setAttribute(CANVAS_PLACEHOLDER_ATTR, 'true');
+        placeholder.setAttribute(MOTION_EXEMPT_ATTR, 'true');
+        if (canvas.className) {
+          placeholder.className = canvas.className;
+        }
+        const inlineStyle = canvas.getAttribute('style');
+        if (inlineStyle) {
+          placeholder.setAttribute('style', inlineStyle);
+        }
+        if (!placeholder.style.width && canvas.clientWidth > 0) {
+          placeholder.style.width = `${canvas.clientWidth}px`;
+        }
+        if (!placeholder.style.height && canvas.clientHeight > 0) {
+          placeholder.style.height = `${canvas.clientHeight}px`;
+        }
+        placeholder.style.pointerEvents = 'none';
+        canvas.insertAdjacentElement('afterend', placeholder);
+        canvas.setAttribute(CANVAS_PLACEHOLDER_ID_ATTR, placeholderId);
+      }
+
+      canvas.style.visibility = 'hidden';
+    };
+
+    const unfreezeCanvasElement = (canvas: HTMLCanvasElement) => {
+      const placeholderId = canvas.getAttribute(CANVAS_PLACEHOLDER_ID_ATTR);
+      if (placeholderId) {
+        document.getElementById(placeholderId)?.remove();
+      }
+      const originalVisibility = canvas.getAttribute(CANVAS_ORIGINAL_VISIBILITY_ATTR);
+      canvas.style.visibility = originalVisibility ?? '';
+      canvas.removeAttribute(CANVAS_FROZEN_ATTR);
+      canvas.removeAttribute(CANVAS_ORIGINAL_VISIBILITY_ATTR);
+      canvas.removeAttribute(CANVAS_PLACEHOLDER_ID_ATTR);
+    };
+
+    const freezeCanvasesInNode = (node: Node) => {
+      if (node instanceof HTMLCanvasElement) {
+        freezeCanvasElement(node);
+      }
+      if (!(node instanceof Element || node instanceof Document || node instanceof DocumentFragment)) {
+        return;
+      }
+      const root = node as ParentNode;
+      const canvases = Array.from(root.querySelectorAll<HTMLCanvasElement>('canvas'));
+      for (const canvas of canvases) {
+        freezeCanvasElement(canvas);
+      }
+    };
+
+    const freezeAllCanvases = () => {
+      freezeCanvasesInNode(document.documentElement);
+    };
+
+    const unfreezeAllCanvases = () => {
+      const canvases = Array.from(document.querySelectorAll<HTMLCanvasElement>(`canvas[${CANVAS_FROZEN_ATTR}="true"]`));
+      for (const canvas of canvases) {
+        unfreezeCanvasElement(canvas);
+      }
+      const placeholders = Array.from(document.querySelectorAll<HTMLElement>(`[${CANVAS_PLACEHOLDER_ATTR}="true"]`));
+      for (const placeholder of placeholders) {
+        placeholder.remove();
+      }
+    };
+
+    const startGifFreezeObserver = () => {
+      if (reduceMotionGifObserver) return;
+      reduceMotionGifObserver = new MutationObserver((mutations) => {
+        if (!reduceMotionEnabled) return;
+        for (const mutation of mutations) {
+          if (mutation.type === 'attributes' && mutation.target instanceof HTMLImageElement) {
+            freezeGifImage(mutation.target);
+            continue;
+          }
+          if (mutation.type === 'attributes' && mutation.target instanceof HTMLSourceElement) {
+            const picture = mutation.target.closest('picture');
+            const image = picture?.querySelector<HTMLImageElement>('img');
+            if (image) {
+              freezeGifImage(image);
+            }
+            continue;
+          }
+          if (mutation.type === 'childList') {
+            for (const addedNode of mutation.addedNodes) {
+              freezeGifImagesInNode(addedNode);
+              freezeCanvasesInNode(addedNode);
+            }
+          }
+        }
+      });
+      reduceMotionGifObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['src', 'srcset'],
+      });
+    };
+
+    const stopGifFreezeObserver = () => {
+      reduceMotionGifObserver?.disconnect();
+      reduceMotionGifObserver = null;
+    };
+
+    const runReduceMotionRescan = () => {
+      if (!reduceMotionEnabled) return;
+      freezeAllGifImages();
+      freezeAllCanvases();
+    };
+
+    const startReduceMotionRescanLoop = () => {
+      if (reduceMotionRescanInterval !== null) return;
+      runReduceMotionRescan();
+      reduceMotionRescanInterval = window.setInterval(runReduceMotionRescan, REDUCE_MOTION_RESCAN_INTERVAL_MS);
+    };
+
+    const stopReduceMotionRescanLoop = () => {
+      if (reduceMotionRescanInterval === null) return;
+      window.clearInterval(reduceMotionRescanInterval);
+      reduceMotionRescanInterval = null;
+    };
+
+    const applyReducedMotion = (enabled: boolean) => {
+      reduceMotionEnabled = enabled;
+      applyPageReducedMotionMode(enabled);
+      if (!enabled) {
+        stopGifFreezeObserver();
+        stopReduceMotionRescanLoop();
+        unfreezeAllGifImages();
+        unfreezeAllCanvases();
+        return;
+      }
+      startGifFreezeObserver();
+      startReduceMotionRescanLoop();
+      freezeAllGifImages();
+      freezeAllCanvases();
     };
 
     const getSpeechEngine = (): SpeechSynthesis | null => {
@@ -1184,6 +1754,7 @@ export default defineContentScript({
       const root = document.createElement('div');
       root.className = 'unity-audio-page-follow-host';
       root.setAttribute(UI_ATTR, 'true');
+      root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
       root.innerHTML = `
         <div class="unity-audio-page-follow-line" data-variant="previous"></div>
         <div class="unity-audio-page-follow-line" data-variant="current"></div>
@@ -1379,6 +1950,7 @@ export default defineContentScript({
         const root = document.createElement('section');
         root.id = AUDIO_FOLLOW_PANEL_ID;
         root.setAttribute(UI_ATTR, 'true');
+        root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
         root.setAttribute('data-color-blind-mode', String(colorBlindModeEnabled));
         root.innerHTML = `
           <div class="unity-afp-head">
@@ -1840,6 +2412,9 @@ export default defineContentScript({
       areaName: string,
     ) => {
       if (areaName !== 'local') return;
+      if (REDUCE_MOTION_STORAGE_KEY in changes) {
+        applyReducedMotion(Boolean(changes[REDUCE_MOTION_STORAGE_KEY]?.newValue));
+      }
       if (COLOR_BLIND_MODE_STORAGE_KEY in changes) {
         colorBlindModeEnabled = Boolean(changes[COLOR_BLIND_MODE_STORAGE_KEY]?.newValue);
         applyColorBlindModeToUi();
@@ -1864,16 +2439,19 @@ export default defineContentScript({
     ensureForcedFontObserver();
     void ext.storage.local
       .get([
+        REDUCE_MOTION_STORAGE_KEY,
         COLOR_BLIND_MODE_STORAGE_KEY,
         FORCED_FONT_STORAGE_KEY,
         AUDIO_RATE_STORAGE_KEY,
         AUDIO_FOLLOW_MODE_STORAGE_KEY,
       ])
       .then((stored) => {
+        reduceMotionEnabled = Boolean(stored?.[REDUCE_MOTION_STORAGE_KEY]);
         colorBlindModeEnabled = Boolean(stored?.[COLOR_BLIND_MODE_STORAGE_KEY]);
         forcedFont = normalizeForcedFont(stored?.[FORCED_FONT_STORAGE_KEY]);
         audioRate = clampAudioRate(Number(stored?.[AUDIO_RATE_STORAGE_KEY] ?? 1));
         audioFollowModeEnabled = Boolean(stored?.[AUDIO_FOLLOW_MODE_STORAGE_KEY]);
+        applyReducedMotion(reduceMotionEnabled);
         applyColorBlindModeToUi();
         applyPageColorBlindMode(colorBlindModeEnabled);
         applyForcedPageFont(forcedFont);
@@ -1910,6 +2488,8 @@ export default defineContentScript({
       forcedFontObserver?.disconnect();
       forcedFontObserver = null;
       stopForcedFontRescanLoop();
+      stopGifFreezeObserver();
+      stopReduceMotionRescanLoop();
       window.removeEventListener('resize', onResize);
       ext.runtime.onMessage.removeListener(onRuntimeMessage as any);
       ext.storage.onChanged.removeListener(onStorageChanged);

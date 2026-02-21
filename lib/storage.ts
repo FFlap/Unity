@@ -3,6 +3,7 @@ import type { ChatSession, ScanReport, TabContext } from '@/lib/types';
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
 export const COLOR_BLIND_MODE_STORAGE_KEY = 'unity_color_blind_mode';
+export const REDUCE_MOTION_STORAGE_KEY = 'unity_reduce_motion';
 export const AUDIO_RATE_STORAGE_KEY = 'unity_audio_rate';
 export const AUDIO_FOLLOW_MODE_STORAGE_KEY = 'unity_audio_follow_mode';
 export const FORCED_FONT_STORAGE_KEY = 'unity_forced_font';
@@ -55,6 +56,15 @@ export async function getColorBlindModeEnabled(): Promise<boolean> {
 
 export async function setColorBlindModeEnabled(enabled: boolean): Promise<void> {
   await ext.storage.local.set({ [COLOR_BLIND_MODE_STORAGE_KEY]: enabled });
+}
+
+export async function getReduceMotionEnabled(): Promise<boolean> {
+  const stored = await ext.storage.local.get(REDUCE_MOTION_STORAGE_KEY);
+  return Boolean(stored?.[REDUCE_MOTION_STORAGE_KEY]);
+}
+
+export async function setReduceMotionEnabled(enabled: boolean): Promise<void> {
+  await ext.storage.local.set({ [REDUCE_MOTION_STORAGE_KEY]: enabled });
 }
 
 function normalizeAudioRate(rate: number): number {
