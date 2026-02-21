@@ -115,36 +115,6 @@ input {
   --unity-cbm-outline: rgba(16, 64, 112, 0.16);
 }
 
-.mode-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 14px;
-  border-bottom: 1px solid var(--unity-border);
-  background: var(--unity-header-bg);
-}
-
-.mode-label {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-
-.mode-label-title {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.mode-label-hint {
-  font-size: 10px;
-  color: var(--unity-muted);
-  line-height: 1.25;
-}
-
 .mode-switch {
   display: inline-flex;
   align-items: center;
@@ -672,11 +642,29 @@ input {
   font-size: 12px;
 }
 
+.modal-section-title {
+  margin: 8px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .modal-row {
   margin-top: 10px;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
+}
+
+.modal-section {
+  margin-top: 10px;
+  border-top: 1px solid var(--unity-border);
+  padding-top: 10px;
+}
+
+.modal-section .audio-follow-row {
+  margin-top: 8px;
 }
 
 .unity-shell--cbm .pill {

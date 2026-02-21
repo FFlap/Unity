@@ -24,7 +24,6 @@ import type {
   ChatMessage,
   ChatSession,
   RuntimeRequest,
-  ScanReport,
   ScanStatus,
   SourceSnippet,
 } from '@/lib/types';
@@ -39,9 +38,9 @@ import {
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
+const COLOR_BLIND_SWITCH_ID = 'unity-color-blind-mode-switch';
 
 type SettingsResponse = { hasApiKey: boolean };
-type ReportResponse = { report: ScanReport | null };
 type SessionResponse = { session: ChatSession | null };
 type AskResponse = {
   ok: boolean;
@@ -76,8 +75,6 @@ type AudioResponse = {
   state?: AudioState;
   error?: string;
 };
-
-const runningStates = new Set<ScanStatus['state']>(['extracting', 'analyzing', 'highlighting']);
 
 async function getPopupMicrophonePermissionState(): Promise<PermissionState | 'unknown'> {
   if (!('permissions' in navigator) || typeof navigator.permissions?.query !== 'function') {
@@ -189,11 +186,15 @@ function SettingsModal({
   open,
   onClose,
   hasApiKey,
+  isColorBlindMode,
+  onToggleColorBlindMode,
   onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   hasApiKey: boolean;
+  isColorBlindMode: boolean;
+  onToggleColorBlindMode: () => void | Promise<void>;
   onSaved: () => void;
 }) {
   const [apiKey, setApiKey] = useState('');
@@ -230,9 +231,10 @@ function SettingsModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-head">
-          <h2>OpenRouter Key</h2>
+          <h2>Settings</h2>
           <button type="button" className="ghost-btn" onClick={onClose}>Close</button>
         </div>
+        <p className="modal-section-title">OpenRouter API Key</p>
         <p className="modal-note">
           Stored locally in your browser. {hasApiKey ? 'A key is already configured.' : 'No key configured yet.'}
         </p>
@@ -258,6 +260,30 @@ function SettingsModal({
           </button>
         </div>
         {message && <p className="modal-feedback">{message}</p>}
+
+        <section className="modal-section" aria-label="Accessibility settings">
+          <p className="modal-section-title">Accessibility</p>
+          <div className="audio-follow-row">
+            <label htmlFor={COLOR_BLIND_SWITCH_ID} className="audio-follow-label">
+              <span>Color Blind Mode</span>
+              <small>Adds non-color cues for status and highlights.</small>
+            </label>
+            <button
+              id={COLOR_BLIND_SWITCH_ID}
+              type="button"
+              className="mode-switch"
+              role="switch"
+              aria-checked={isColorBlindMode}
+              onClick={() => void onToggleColorBlindMode()}
+              title="Toggle Color Blind Mode"
+            >
+              <span className="mode-switch-track" aria-hidden="true">
+                <span className="mode-switch-knob" />
+              </span>
+              <span className="mode-switch-text">{isColorBlindMode ? 'On' : 'Off'}</span>
+            </button>
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -305,10 +331,9 @@ function App() {
   const [status, setStatus] = useState<ScanStatus>({
     state: 'idle',
     progress: 0,
-    message: 'Ready to scan this tab.',
+    message: 'Ready for grounded Q&A.',
     updatedAt: Date.now(),
   });
-  const [report, setReport] = useState<ScanReport | null>(null);
   const [session, setSession] = useState<ChatSession | null>(null);
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
@@ -331,14 +356,12 @@ function App() {
   const pendingCursorRef = useRef<number | null>(null);
 
   const refreshTabData = useCallback(async (tabId: number) => {
-    const [nextStatus, reportResponse, sessionResponse] = await Promise.all([
+    const [nextStatus, sessionResponse] = await Promise.all([
       sendMessage<ScanStatus>({ type: 'GET_SCAN_STATUS', tabId }),
-      sendMessage<ReportResponse>({ type: 'GET_REPORT', tabId }),
       sendMessage<SessionResponse>({ type: 'GET_CHAT_SESSION', tabId }),
     ]);
 
     setStatus(nextStatus);
-    setReport(reportResponse.report);
     setSession(sessionResponse.session);
   }, []);
 
@@ -570,17 +593,6 @@ function App() {
     }
   }, [activeTabId, hasApiKey, isAsking]);
 
-  const startScan = useCallback(async () => {
-    if (activeTabId == null) return;
-    setError(null);
-    try {
-      await sendMessage<{ ok: boolean; tabId: number }>({ type: 'START_SCAN', tabId: activeTabId });
-      await refreshTabData(activeTabId);
-    } catch (scanError) {
-      setError(scanError instanceof Error ? scanError.message : 'Failed to start scan.');
-    }
-  }, [activeTabId, refreshTabData]);
-
   const clearChat = useCallback(async () => {
     if (activeTabId == null) return;
     setError(null);
@@ -731,10 +743,11 @@ function App() {
   }, [activeTabId, refreshAudioState]);
 
   const messages = useMemo(() => session?.messages ?? [], [session?.messages]);
-  const isRunning = runningStates.has(status.state);
-  const hasContext = report != null;
   const isComposerDisabled = !hasApiKey || activeTabId == null || isAsking;
-  const modeSwitchId = 'unity-color-blind-mode-switch';
+  const statusMessage =
+    status.message === 'Ready to scan this tab.'
+      ? 'Ready for grounded Q&A.'
+      : status.message;
 
   const toggleColorBlindMode = useCallback(async () => {
     const next = !isColorBlindMode;
@@ -793,37 +806,13 @@ function App() {
 
   return (
     <div className={`unity-shell ${isColorBlindMode ? 'unity-shell--cbm' : ''}`.trim()}>
-      <section className="mode-row">
-        <div className="mode-label">
-          <span className="mode-label-title">Color Blind Mode</span>
-          <span className="mode-label-hint">Adds non-color cues for status and highlights.</span>
-        </div>
-        <button
-          id={modeSwitchId}
-          type="button"
-          className="mode-switch"
-          role="switch"
-          aria-checked={isColorBlindMode}
-          onClick={() => void toggleColorBlindMode()}
-          title="Toggle Color Blind Mode"
-        >
-          <span className="mode-switch-track" aria-hidden="true">
-            <span className="mode-switch-knob" />
-          </span>
-          <span className="mode-switch-text">{isColorBlindMode ? 'On' : 'Off'}</span>
-        </button>
-      </section>
       <header className="unity-header">
         <div>
           <p className="kicker">Unity</p>
           <h1>{activePane === 'chat' ? 'Grounded Tab Chat' : 'Audio Reader'}</h1>
         </div>
         <div className="header-actions">
-          {activePane === 'chat' ? (
-            <button type="button" className="icon-btn" onClick={() => void startScan()} disabled={isRunning || activeTabId == null}>
-              <RotateCcw size={14} className={isRunning ? 'spin' : ''} />
-            </button>
-          ) : (
+          {activePane === 'audio' && (
             <button type="button" className="icon-btn" onClick={() => void refreshAudioState()} disabled={!canUseAudio}>
               <RotateCcw size={14} className={isAudioLoading ? 'spin' : ''} />
             </button>
@@ -859,7 +848,7 @@ function App() {
         <>
           <section className="status-row">
             <span className={`pill pill--${status.state}`}>{status.state}</span>
-            <p>{status.message}</p>
+            <p>{statusMessage}</p>
           </section>
 
           {!hasApiKey && (
@@ -868,19 +857,10 @@ function App() {
             </section>
           )}
 
-          {!hasContext && (
-            <section className="empty-card">
-              <p>Run a scan to prepare this tab for grounded Q&A.</p>
-              <button type="button" className="primary-btn" onClick={() => void startScan()} disabled={activeTabId == null || isRunning}>
-                {isRunning ? <LoaderCircle size={14} className="spin" /> : 'Scan Tab'}
-              </button>
-            </section>
-          )}
-
           <section className="chat-feed" data-testid="chat-feed">
             {messages.length === 0 ? (
               <div className="empty-chat">
-                <p>Ask about the current tab. Answers are grounded only in page/video context.</p>
+                <p>Ask about the current tab. Context is prepared automatically on your first question.</p>
               </div>
             ) : (
               messages.map((message) => (
@@ -1058,6 +1038,8 @@ function App() {
         open={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         hasApiKey={hasApiKey}
+        isColorBlindMode={isColorBlindMode}
+        onToggleColorBlindMode={toggleColorBlindMode}
         onSaved={() => {
           setHasApiKey(true);
           setIsSettingsOpen(false);
