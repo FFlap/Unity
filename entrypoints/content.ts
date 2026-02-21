@@ -16,6 +16,7 @@ import {
 import { COLOR_BLIND_MODE_STORAGE_KEY } from '@/lib/storage';
 
 const PANEL_ID = 'unity-youtube-chat-root';
+const MOTION_EXEMPT_ATTR = 'data-unity-motion-exempt';
 const STYLE_ID = 'unity-youtube-chat-style';
 const URL_CHECK_INTERVAL_MS = 900;
 const POLL_INTERVAL_MS = 1700;
@@ -614,6 +615,7 @@ function findPanelHost(): HTMLElement | null {
 function createPanelRoot(): HTMLElement {
   const root = document.createElement('section');
   root.id = PANEL_ID;
+  root.setAttribute(MOTION_EXEMPT_ATTR, 'true');
   root.setAttribute('data-testid', 'unity-youtube-panel');
   return root;
 }

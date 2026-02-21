@@ -20,11 +20,13 @@ import {
   getAudioRate,
   getColorBlindModeEnabled,
   getForcedFont,
+  getReduceMotionEnabled,
   saveAutofillProfile,
   setAudioFollowModeEnabled,
   setAudioRate,
   setColorBlindModeEnabled,
   setForcedFont,
+  setReduceMotionEnabled,
   type ForcedFontOption,
 } from '@/lib/storage';
 import type {
@@ -49,6 +51,7 @@ const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeo
 const API_KEY_STORAGE_KEY = 'openrouter_api_key';
 const LEGACY_API_KEY_STORAGE_KEY = 'gemini_api_key';
 const COLOR_BLIND_SWITCH_ID = 'unity-color-blind-mode-switch';
+const REDUCE_MOTION_SWITCH_ID = 'unity-reduce-motion-switch';
 const FORCED_FONT_SELECT_ID = 'unity-forced-font-select';
 
 type SettingsResponse = { hasApiKey: boolean };
@@ -352,8 +355,10 @@ function SettingsModal({
   onClose,
   hasApiKey,
   isColorBlindMode,
+  isReduceMotion,
   forcedFont,
   onToggleColorBlindMode,
+  onToggleReduceMotion,
   onForcedFontChange,
   onSaved,
 }: {
@@ -361,8 +366,10 @@ function SettingsModal({
   onClose: () => void;
   hasApiKey: boolean;
   isColorBlindMode: boolean;
+  isReduceMotion: boolean;
   forcedFont: ForcedFontOption;
   onToggleColorBlindMode: () => void | Promise<void>;
+  onToggleReduceMotion: () => void | Promise<void>;
   onForcedFontChange: (font: ForcedFontOption) => void | Promise<void>;
   onSaved: () => void;
 }) {
@@ -453,6 +460,26 @@ function SettingsModal({
             </button>
           </div>
           <div className="audio-follow-row">
+            <label htmlFor={REDUCE_MOTION_SWITCH_ID} className="audio-follow-label">
+              <span>Stop Motion</span>
+              <small>Pauses webpage motion, including autoplay media and animated effects.</small>
+            </label>
+            <button
+              id={REDUCE_MOTION_SWITCH_ID}
+              type="button"
+              className="mode-switch"
+              role="switch"
+              aria-checked={isReduceMotion}
+              onClick={() => void onToggleReduceMotion()}
+              title="Toggle Stop Motion"
+            >
+              <span className="mode-switch-track" aria-hidden="true">
+                <span className="mode-switch-knob" />
+              </span>
+              <span className="mode-switch-text">{isReduceMotion ? 'On' : 'Off'}</span>
+            </button>
+          </div>
+          <div className="audio-follow-row">
             <label htmlFor={FORCED_FONT_SELECT_ID} className="audio-follow-label">
               <span>Force Web Font</span>
               <small>Apply a preferred font across webpages while browsing.</small>
@@ -529,6 +556,7 @@ function App() {
   const [isAsking, setIsAsking] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isColorBlindMode, setIsColorBlindMode] = useState(false);
+  const [isReduceMotion, setIsReduceMotion] = useState(false);
   const [forcedFont, setForcedFontState] = useState<ForcedFontOption>('none');
   const [activePane, setActivePane] = useState<PopupTab>('chat');
   const [audioState, setAudioState] = useState<AudioState>(defaultAudioState);
@@ -610,14 +638,16 @@ function App() {
           (typeof localStorageState?.[LEGACY_API_KEY_STORAGE_KEY] === 'string' &&
             localStorageState[LEGACY_API_KEY_STORAGE_KEY].trim().length > 0);
 
-        const [nextColorBlindMode, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
+        const [nextColorBlindMode, nextReduceMotion, nextAudioRate, nextAudioFollow, nextForcedFont] = await Promise.all([
           getColorBlindModeEnabled(),
+          getReduceMotionEnabled(),
           getAudioRate(),
           getAudioFollowModeEnabled(),
           getForcedFont(),
         ]);
         setHasApiKey(storageHasKey || Boolean(settings.hasApiKey));
         setIsColorBlindMode(nextColorBlindMode);
+        setIsReduceMotion(nextReduceMotion);
         setForcedFontState(nextForcedFont);
         setAudioRateState(nextAudioRate);
         setAudioFollowModeState(nextAudioFollow);
@@ -1121,6 +1151,17 @@ function App() {
       setError(saveError instanceof Error ? saveError.message : 'Failed to update accessibility mode.');
     }
   }, [isColorBlindMode]);
+
+  const toggleReduceMotion = useCallback(async () => {
+    const next = !isReduceMotion;
+    setIsReduceMotion(next);
+    try {
+      await setReduceMotionEnabled(next);
+    } catch (saveError) {
+      setIsReduceMotion(!next);
+      setError(saveError instanceof Error ? saveError.message : 'Failed to update stop motion setting.');
+    }
+  }, [isReduceMotion]);
 
   const handleForcedFontChange = useCallback(async (nextFont: ForcedFontOption) => {
     setForcedFontState(nextFont);
@@ -1694,8 +1735,10 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         hasApiKey={hasApiKey}
         isColorBlindMode={isColorBlindMode}
+        isReduceMotion={isReduceMotion}
         forcedFont={forcedFont}
         onToggleColorBlindMode={toggleColorBlindMode}
+        onToggleReduceMotion={toggleReduceMotion}
         onForcedFontChange={handleForcedFontChange}
         onSaved={() => {
           setHasApiKey(true);
