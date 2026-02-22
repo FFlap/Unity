@@ -1044,18 +1044,18 @@ function installStyles() {
   style.id = STYLE_ID;
   style.textContent = `
     #${ACTION_BAR_ID} {
-      --cred-ab-bg: #fff7ef;
-      --cred-ab-border: #e8dbcf;
-      --cred-ab-shadow: rgba(24, 18, 13, 0.25);
-      --cred-ab-btn-bg: #af6d3a;
-      --cred-ab-btn-text: #fff7ef;
-      --cred-ab-level-border: #d9c7b5;
-      --cred-ab-level-bg: #fffdf9;
-      --cred-ab-level-text: #7a6a5b;
-      --cred-ab-level-active-bg: #e8d7c6;
-      --cred-ab-level-active-border: #c9ac8d;
-      --cred-ab-level-active-text: #5f4935;
-      --cred-ab-focus: rgba(175, 109, 58, 0.6);
+      --cred-ab-bg: #ffffff;
+      --cred-ab-border: #e0e0e0;
+      --cred-ab-shadow: rgba(0, 0, 0, 0.15);
+      --cred-ab-btn-bg: #000000;
+      --cred-ab-btn-text: #ffffff;
+      --cred-ab-level-border: #e0e0e0;
+      --cred-ab-level-bg: #fafafa;
+      --cred-ab-level-text: #555555;
+      --cred-ab-level-active-bg: #f5f5f5;
+      --cred-ab-level-active-border: #000000;
+      --cred-ab-level-active-text: #000000;
+      --cred-ab-focus: rgba(0, 0, 0, 0.6);
       --cred-ab-focus-shadow: transparent;
       --cred-ab-outline: transparent;
       position: fixed;
@@ -1145,17 +1145,17 @@ function installStyles() {
       box-shadow: 0 0 0 2px var(--cred-ab-focus-shadow);
     }
     #${CARD_ID} {
-      --cred-card-border: #e8dbcf;
-      --cred-card-bg: #fffcf8;
-      --cred-card-text: #2d2520;
-      --cred-card-shadow: rgba(24, 18, 13, 0.28);
-      --cred-card-head-border: #f0e2d5;
-      --cred-card-head-bg: #faf6f0;
-      --cred-card-title: #5c4f44;
-      --cred-card-close: #6f5e4f;
-      --cred-card-close-hover: rgba(175, 109, 58, 0.1);
-      --cred-card-loading: #7a6a5b;
-      --cred-card-error: #a13f32;
+      --cred-card-border: #e0e0e0;
+      --cred-card-bg: #ffffff;
+      --cred-card-text: #000000;
+      --cred-card-shadow: rgba(0, 0, 0, 0.15);
+      --cred-card-head-border: #eee;
+      --cred-card-head-bg: #fafafa;
+      --cred-card-title: #000000;
+      --cred-card-close: #666666;
+      --cred-card-close-hover: rgba(0, 0, 0, 0.05);
+      --cred-card-loading: #666666;
+      --cred-card-error: #d32f2f;
       --cred-card-status-stripe: transparent;
       position: fixed;
       z-index: 2147483647;
