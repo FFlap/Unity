@@ -48,8 +48,7 @@ const ATTACH_SHADOW_HOOK_ATTR = 'data-unity-attach-shadow-hook';
 const MIN_SELECTION_CHARS = 16;
 const POINTER_ANCHOR_MAX_AGE_MS = 2_500;
 const AUDIO_PAGE_FOLLOW_PROGRESS_LAG = 0.07;
-const AUDIO_PAGE_FOLLOW_LINE_ADVANCE_HYSTERESIS = 0.38;
-const AUDIO_PAGE_FOLLOW_MIN_ADVANCE_MS = 320;
+const AUDIO_PAGE_FOLLOW_MIN_ADVANCE_MS = 120;
 const REDUCE_MOTION_RESCAN_INTERVAL_MS = 900;
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
@@ -92,7 +91,9 @@ type AudioContentRequest =
   | { type: 'AUDIO_PAUSE' }
   | { type: 'AUDIO_STOP' }
   | { type: 'AUDIO_SET_RATE'; rate: number }
-  | { type: 'AUDIO_SET_FOLLOW_MODE'; enabled: boolean };
+  | { type: 'AUDIO_SET_FOLLOW_MODE'; enabled: boolean }
+  | { type: 'AUDIO_DEBUG_LOAD_SELECTION' }
+  | { type: 'AUDIO_DEBUG_SET_PROGRESS'; progress: number };
 
 type FormFieldScanRequest = { type: 'FORM_SCAN_FIELDS' };
 type FormFillSelection = {
@@ -2092,6 +2093,8 @@ export default defineContentScript({
     let audioSelectionLineRects: SelectionLineRect[] = [];
     let audioSelectionLineWeightEnds: number[] = [];
     let audioSelectionLineWeightTotal = 0;
+    let audioRememberedSelectionText = '';
+    let audioRememberedSelectionRange: Range | null = null;
     let audioFollowPanel: HTMLElement | null = null;
     let audioFollowMeta: HTMLElement | null = null;
     let audioFollowLinesHost: HTMLElement | null = null;
@@ -2109,6 +2112,11 @@ export default defineContentScript({
     let canvasPlaceholderCounter = 0;
     let readerModeRoot: HTMLElement | null = null;
     let readerModeEnabled = false;
+
+    type AudioSelectionSnapshot = {
+      text: string;
+      range: Range | null;
+    };
 
     const getReaderModeEnabled = (): boolean =>
       readerModeEnabled &&
@@ -2806,18 +2814,78 @@ export default defineContentScript({
       return maybe && typeof maybe.speak === 'function' ? maybe : null;
     };
 
-    const getCurrentSelectionText = (): string => {
-      const value = window.getSelection()?.toString() ?? '';
-      return value.replace(/\s+/g, ' ').trim();
+    const cloneRangeSafely = (range: Range | null): Range | null => {
+      if (!range) return null;
+      try {
+        return range.cloneRange();
+      } catch {
+        return null;
+      }
     };
 
-    const getCurrentSelectionSnapshot = (): { text: string; range: Range } | null => {
+    const getLiveAudioSelectionSnapshot = (): AudioSelectionSnapshot | null => {
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
-      const range = selection.getRangeAt(0).cloneRange();
-      const text = selection.toString().replace(/\s+/g, ' ').trim();
+      const text = normalizeInlineText(selection.toString());
       if (!text) return null;
-      return { text, range };
+      return {
+        text,
+        range: cloneRangeSafely(selection.getRangeAt(0)),
+      };
+    };
+
+    const rememberAudioSelection = (snapshot: AudioSelectionSnapshot | null) => {
+      if (!snapshot) {
+        audioRememberedSelectionText = '';
+        audioRememberedSelectionRange = null;
+        return;
+      }
+      audioRememberedSelectionText = snapshot.text;
+      audioRememberedSelectionRange = cloneRangeSafely(snapshot.range);
+    };
+
+    const syncAudioSelectionMemory = () => {
+      const live = getLiveAudioSelectionSnapshot();
+      if (live) {
+        rememberAudioSelection(live);
+        return;
+      }
+      if (document.hasFocus()) {
+        rememberAudioSelection(null);
+      }
+    };
+
+    const getCurrentSelectionText = (): string => {
+      const live = getLiveAudioSelectionSnapshot();
+      if (live) {
+        rememberAudioSelection(live);
+        return live.text;
+      }
+      if (!document.hasFocus() && audioRememberedSelectionText) {
+        return audioRememberedSelectionText;
+      }
+      if (document.hasFocus()) {
+        rememberAudioSelection(null);
+      }
+      return '';
+    };
+
+    const getCurrentSelectionSnapshot = (): AudioSelectionSnapshot | null => {
+      const live = getLiveAudioSelectionSnapshot();
+      if (live) {
+        rememberAudioSelection(live);
+        return live;
+      }
+      if (!document.hasFocus() && audioRememberedSelectionText) {
+        return {
+          text: audioRememberedSelectionText,
+          range: cloneRangeSafely(audioRememberedSelectionRange),
+        };
+      }
+      if (document.hasFocus()) {
+        rememberAudioSelection(null);
+      }
+      return null;
     };
 
     const buildSelectionLineRects = (range: Range): SelectionLineRect[] => {
@@ -2860,7 +2928,8 @@ export default defineContentScript({
       const cumulative: number[] = [];
       let total = 0;
       for (const rect of audioSelectionLineRects) {
-        const weight = Math.max(1, rect.width * Math.max(1, rect.height));
+        // Speech progress maps to text flow along each line, so horizontal span is a better proxy than area.
+        const weight = Math.max(1, rect.width);
         total += weight;
         cumulative.push(total);
       }
@@ -3042,15 +3111,6 @@ export default defineContentScript({
       ) {
         const now = Date.now();
         if (now - audioLastPageLineChangeAt < AUDIO_PAGE_FOLLOW_MIN_ADVANCE_MS) {
-          lineIndex = audioCurrentPageLineIndex;
-        }
-        const currentEnd = audioSelectionLineWeightEnds[audioCurrentPageLineIndex];
-        const currentStart =
-          audioCurrentPageLineIndex === 0 ? 0 : audioSelectionLineWeightEnds[audioCurrentPageLineIndex - 1];
-        const currentWeight = Math.max(1, currentEnd - currentStart);
-        const rawTarget = rawProgress * audioSelectionLineWeightTotal;
-        const holdUntil = currentEnd + currentWeight * AUDIO_PAGE_FOLLOW_LINE_ADVANCE_HYSTERESIS;
-        if (rawTarget < holdUntil) {
           lineIndex = audioCurrentPageLineIndex;
         }
       }
@@ -3257,12 +3317,29 @@ export default defineContentScript({
       synth.speak(utterance);
     };
 
-    const readSelectionAndSpeak = async () => {
+    const loadSelectionIntoAudioState = () => {
       const snapshot = getCurrentSelectionSnapshot();
       if (!snapshot?.text) {
         throw new Error('Select text on the page first.');
       }
-      prepareAudioText(snapshot.text, snapshot.range);
+      prepareAudioText(snapshot.text, snapshot.range ?? undefined);
+      return snapshot;
+    };
+
+    const setAudioProgressForFollowMode = (progress: number) => {
+      if (!audioCurrentText.trim()) {
+        throw new Error('Select text on the page first.');
+      }
+      const normalized = clamp(Number(progress), 0, 1);
+      const maxChar = Math.max(0, audioCurrentText.length - 1);
+      const nextChar = Math.floor(maxChar * normalized);
+      audioCurrentCharIndex = nextChar;
+      updateAudioLineHighlight(resolveLineIndexFromChar(nextChar));
+      updateCurrentPageLineFromCharIndex(nextChar);
+    };
+
+    const readSelectionAndSpeak = async () => {
+      loadSelectionIntoAudioState();
       await speakFromOffset(0);
     };
 
@@ -3270,7 +3347,7 @@ export default defineContentScript({
       const snapshot = getCurrentSelectionSnapshot();
       if (!snapshot?.text) return false;
       if (snapshot.text === audioCurrentText) return false;
-      prepareAudioText(snapshot.text, snapshot.range);
+      prepareAudioText(snapshot.text, snapshot.range ?? undefined);
       await speakFromOffset(0);
       return true;
     };
@@ -3452,6 +3529,7 @@ export default defineContentScript({
     document.addEventListener(
       'selectionchange',
       () => {
+        syncAudioSelectionMemory();
         if (pointerSelectionInProgress) return;
         refreshSelectionUi();
       },
@@ -3474,6 +3552,7 @@ export default defineContentScript({
       (event) => {
         if (isUiNode(event.target as Node | null)) return;
         pointerSelectionInProgress = false;
+        syncAudioSelectionMemory();
         lastPointerAnchor = {
           x: event.clientX,
           y: event.clientY,
@@ -3493,6 +3572,19 @@ export default defineContentScript({
       },
       true,
     );
+
+    const onWindowBlur = () => {
+      syncAudioSelectionMemory();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        syncAudioSelectionMemory();
+      }
+    };
+
+    window.addEventListener('blur', onWindowBlur, true);
+    document.addEventListener('visibilitychange', onVisibilityChange, true);
 
     const onRuntimeMessage = (
       rawMessage: unknown,
@@ -3516,7 +3608,10 @@ export default defineContentScript({
       ) {
         return;
       }
-      if ((message.type as string).startsWith('ARTICLE_') && window.top !== window) {
+      if (
+        ((message.type as string).startsWith('ARTICLE_') || (message.type as string).startsWith('AUDIO_')) &&
+        window.top !== window
+      ) {
         return;
       }
 
@@ -3598,6 +3693,14 @@ export default defineContentScript({
               return;
             case 'AUDIO_SET_FOLLOW_MODE':
               setAudioFollowMode(Boolean(message.enabled));
+              sendResponse(audioResponse(true));
+              return;
+            case 'AUDIO_DEBUG_LOAD_SELECTION':
+              loadSelectionIntoAudioState();
+              sendResponse(audioResponse(true));
+              return;
+            case 'AUDIO_DEBUG_SET_PROGRESS':
+              setAudioProgressForFollowMode(message.progress);
               sendResponse(audioResponse(true));
               return;
             default:
@@ -3726,6 +3829,8 @@ export default defineContentScript({
       stopForcedFontRescanLoop();
       stopGifFreezeObserver();
       stopReduceMotionRescanLoop();
+      window.removeEventListener('blur', onWindowBlur, true);
+      document.removeEventListener('visibilitychange', onVisibilityChange, true);
       window.removeEventListener('resize', onResize);
       ext.runtime.onMessage.removeListener(onRuntimeMessage as any);
       ext.storage.onChanged.removeListener(onStorageChanged);

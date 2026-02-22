@@ -200,11 +200,11 @@ const defaultAudioState: AudioState = {
 };
 
 const paneTitleByTab: Record<PopupTab, string> = {
-  chat: 'Grounded Tab Chat',
-  reader: 'Reader',
-  audio: 'Audio Reader',
-  profile: 'Profile',
-  autofill: 'Autofill Preview',
+  chat: 'Unity',
+  reader: 'Unity',
+  audio: 'Unity',
+  profile: 'Unity',
+  autofill: 'Unity',
 };
 
 const profileFieldConfigs: Array<{
@@ -633,6 +633,7 @@ function App() {
   const pendingCursorRef = useRef<number | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasLoadedProfileRef = useRef(false);
+  const audioRefreshRequestRef = useRef(0);
 
   const refreshTabData = useCallback(async (tabId: number) => {
     const [nextStatus, sessionResponse] = await Promise.all([
@@ -1091,10 +1092,14 @@ function App() {
   }, [activeTabId]);
 
   const refreshAudioState = useCallback(async (tabId?: number | null) => {
-    const resolvedTabId = tabId ?? activeTabId;
+    const resolvedTabId = await resolveScannablePageTabId(tabId ?? activeTabId);
     if (resolvedTabId == null) return;
+    const requestId = ++audioRefreshRequestRef.current;
     try {
       const response = await sendTabMessage<AudioResponse>(resolvedTabId, { type: 'AUDIO_GET_STATE' });
+      if (requestId !== audioRefreshRequestRef.current) {
+        return;
+      }
       if (response?.state) {
         setAudioState(response.state);
         setAudioRateState(response.state.rate);
@@ -1104,20 +1109,25 @@ function App() {
         setError(response.error);
       }
     } catch (audioError) {
+      if (requestId !== audioRefreshRequestRef.current) {
+        return;
+      }
       setAudioState((previous) => ({ ...previous, available: false }));
       setError(audioError instanceof Error ? audioError.message : 'Audio controls are unavailable on this tab.');
     }
   }, [activeTabId]);
 
   const runAudioCommand = useCallback(async (command: AudioTabMessage) => {
-    if (activeTabId == null) {
+    const resolvedTabId = await resolveScannablePageTabId(activeTabId);
+    if (resolvedTabId == null) {
       setError('Open an HTTP(S) tab to use Audio.');
       return;
     }
     setError(null);
     setIsAudioLoading(true);
+    audioRefreshRequestRef.current += 1;
     try {
-      const response = await sendTabMessage<AudioResponse>(activeTabId, command);
+      const response = await sendTabMessage<AudioResponse>(resolvedTabId, command);
       if (!response.ok) {
         throw new Error(response.error || 'Audio action failed.');
       }
@@ -1126,7 +1136,7 @@ function App() {
         setAudioRateState(response.state.rate);
         setAudioFollowModeState(response.state.followMode);
       } else {
-        await refreshAudioState(activeTabId);
+        await refreshAudioState(resolvedTabId);
       }
     } catch (audioError) {
       setError(audioError instanceof Error ? audioError.message : 'Audio action failed.');
@@ -1333,7 +1343,7 @@ function App() {
 
     const timer = window.setInterval(() => {
       void refreshAudioState(activeTabId);
-    }, 900);
+    }, 300);
 
     return () => window.clearInterval(timer);
   }, [activePane, activeTabId, refreshAudioState]);
@@ -1436,6 +1446,17 @@ function App() {
     audioState.currentLineIndex >= 0 && audioState.totalLines > 0
       ? `Line ${audioState.currentLineIndex + 1} of ${audioState.totalLines}`
       : 'No active transcript line';
+  const isAudioPlaybackActive = audioState.isSpeaking || audioState.isPaused;
+  const audioSelectionText = audioState.selectionText.trim();
+  const audioDisplayText = isAudioPlaybackActive ? audioState.currentLineText || audioSelectionText : audioSelectionText;
+  const hasAudioContext = isAudioPlaybackActive || audioSelectionText.length > 0;
+  const audioStatusLabel = audioState.isPaused
+    ? 'Paused'
+    : audioState.isSpeaking
+      ? 'Speaking'
+      : audioSelectionText.length > 0 || audioState.hasSelection
+        ? 'Ready'
+        : 'Idle';
 
   return (
     <div className={`unity-shell ${isColorBlindMode ? 'unity-shell--cbm' : ''}`.trim()}>
@@ -1517,11 +1538,6 @@ function App() {
 
       {activePane === 'chat' ? (
         <>
-          <section className="status-row">
-            <span className={`pill pill--${status.state}`}>{status.state}</span>
-            <p>{statusMessage}</p>
-          </section>
-
           {!hasApiKey && (
             <section className="warning-card">
               <p>Add your OpenRouter API key in settings before asking questions.</p>
@@ -1529,15 +1545,9 @@ function App() {
           )}
 
           <section className="chat-feed" data-testid="chat-feed">
-            {messages.length === 0 ? (
-              <div className="empty-chat">
-                <p>Ask about the current tab. Context is prepared automatically on your first question.</p>
-              </div>
-            ) : (
-              messages.map((message) => (
-                <MessageBubble key={message.id} message={message} onJump={jumpToSource} />
-              ))
-            )}
+            {messages.map((message) => (
+              <MessageBubble key={message.id} message={message} onJump={jumpToSource} />
+            ))}
           </section>
 
           <form className="composer" onSubmit={askQuestion}>
@@ -1547,7 +1557,7 @@ function App() {
               onChange={(event) => setQuestion(event.target.value)}
               placeholder="Ask a question about this tab..."
               disabled={isComposerDisabled}
-              rows={3}
+              rows={2}
             />
             <div className="composer-actions">
               <button
@@ -1596,159 +1606,151 @@ function App() {
         </>
       ) : activePane === 'reader' ? (
         <section className="reader-pane">
-          <div className="reader-summary-card">
-            <p className="reader-summary-title">Page Reader Mode</p>
-            <p className="reader-summary-note">
-              Removes non-article elements from the live webpage and centers the main text.
-            </p>
-          </div>
+          <div className="reader-card">
+            <div className="reader-header">
+              <div className="reader-title-group">
+                <h2 className="reader-title">Page Reader Mode</h2>
+                <p className="reader-desc">Removes clutter and centers the main text.</p>
+              </div>
+              <div
+                className="status-badge"
+                style={!isReaderModeEnabled ? { background: 'var(--unity-assistant-bg)', color: 'var(--unity-text)' } : undefined}
+              >
+                {isReaderBusy ? (
+                  <><LoaderCircle size={10} className="spin" style={{ marginRight: 2 }} /> {isReaderModeEnabled ? 'Restoring' : 'Applying'}</>
+                ) : (
+                  isReaderModeEnabled ? 'Active' : 'Inactive'
+                )}
+              </div>
+            </div>
 
-          {isReaderBusy ? (
-            <div className="reader-loading-card">
-              <LoaderCircle size={14} className="spin" />
-              <span>{isReaderModeEnabled ? 'Restoring page...' : 'Applying reader mode...'}</span>
+            <div className="reader-hero-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path><path d="M8 7h6"></path><path d="M8 11h8"></path></svg>
+            </div>
+
+            <div className="reader-controls">
+              <button
+                type="button"
+                className="primary-btn"
+                style={{ width: '100%' }}
+                onClick={() => void toggleReaderMode()}
+                disabled={activeTabId == null || isReaderBusy}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '4px' }}><path d="M2 12h20"></path><path d="m14 4-8 8 8 8"></path></svg>
+                {isReaderModeEnabled ? 'Restore Page' : 'Clean Page'}
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                style={{ width: '100%' }}
+                onClick={() => void refreshReaderModeState()}
+                disabled={activeTabId == null || isReaderBusy}
+              >
+                Refresh State
+              </button>
+            </div>
+            {readerError && (
+              <p style={{ color: 'var(--unity-danger)', fontSize: '0.8rem', textAlign: 'center', margin: 0 }}>{readerError}</p>
+            )}
+          </div>
+        </section>
+      ) : activePane === 'audio' ? (
+                <section className="audio-pane">
+          {!hasAudioContext ? (
+            <div className="idle-card">
+              <div className="idle-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15V6M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM12 12H3M16 6H3M12 18H3"></path></svg>
+              </div>
+              <h2 className="idle-title">Ready to Read</h2>
+              <p className="idle-desc">Highlight any text on the webpage to hear it spoken aloud.</p>
             </div>
           ) : (
-            <div className="reader-action-card">
-              <p className="reader-state-line">{readerStatus}</p>
-              <div className="reader-actions">
+            <div className="player-card">
+              <div className="player-header">
+                <div className="status-badge">
+                  <div className="status-dot" style={{ animationPlayState: audioState.isSpeaking && !audioState.isPaused ? 'running' : 'paused' }} />
+                  {audioStatusLabel}
+                </div>
+                <div className="line-meta">
+                  {isAudioPlaybackActive && audioState.currentLineIndex >= 0 && audioState.totalLines > 0
+                    ? `Line ${audioState.currentLineIndex + 1} of ${audioState.totalLines}`
+                    : ''}
+                </div>
+              </div>
+
+              {audioDisplayText ? (
+                <div className="active-line-box">
+                  {audioDisplayText}
+                </div>
+              ) : null}
+
+              <div className="playback-controls">
+                
                 <button
                   type="button"
-                  className="primary-btn"
-                  onClick={() => void toggleReaderMode()}
-                  disabled={activeTabId == null || isReaderBusy}
+                  className="play-btn"
+                  title={audioState.isPaused || !audioState.isSpeaking ? 'Play' : 'Pause'}
+                  onClick={() => {
+                    if (audioState.isPaused || !audioState.isSpeaking) {
+                      void runAudioCommand({ type: 'AUDIO_PLAY' });
+                    } else {
+                      void runAudioCommand({ type: 'AUDIO_PAUSE' });
+                    }
+                  }}
+                  disabled={!canUseAudio || isAudioLoading}
                 >
-                  {isReaderModeEnabled ? 'Restore Page' : 'Clean Page'}
+                  {audioState.isPaused || !audioState.isSpeaking ? (
+                    <Play size={20} style={{ marginLeft: '3px' }} />
+                  ) : (
+                    <Pause size={20} />
+                  )}
                 </button>
-                <button
-                  type="button"
-                  className="ghost-btn"
-                  onClick={() => void refreshReaderModeState()}
-                  disabled={activeTabId == null || isReaderBusy}
-                >
-                  Refresh State
-                </button>
+              </div>
+
+              <div className="settings-row">
+                <div className="setting-group">
+                  <span className="setting-label">Speed</span>
+                  <div className="speed-slider">
+                    <input
+                      type="range"
+                      min={0.75}
+                      max={2}
+                      step={0.05}
+                      value={audioRate}
+                      onChange={(event) => {
+                        void onAudioRateChange(Number(event.target.value));
+                      }}
+                      disabled={!canUseAudio}
+                    />
+                    <span className="speed-value">{audioRate.toFixed(2)}x</span>
+                  </div>
+                </div>
+                
+                <div className="setting-group">
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span className="setting-label">Follow Mode</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="toggle-switch"
+                    role="switch"
+                    aria-checked={audioFollowMode}
+                    onClick={() => void toggleAudioFollowMode()}
+                    disabled={!canUseAudio}
+                  >
+                    <div className="toggle-knob" />
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {readerError && (
-            <div className="reader-empty-card">
-              <p>{readerError}</p>
-            </div>
-          )}
-        </section>
-      ) : activePane === 'audio' ? (
-        <section className="audio-pane">
-          <div className="audio-read-row">
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={() => void runAudioCommand({ type: 'AUDIO_READ_SELECTION', rate: audioRate, followMode: audioFollowMode })}
-              disabled={!canUseAudio || isAudioLoading}
-            >
-              <Volume2 size={14} />
-              Read Selection
-            </button>
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => void refreshAudioState()}
-              disabled={!canUseAudio || isAudioLoading}
-            >
-              <RotateCcw size={14} />
-              Refresh
-            </button>
-          </div>
-
-          <div className="audio-controls">
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => void runAudioCommand({ type: 'AUDIO_PLAY' })}
-              disabled={!canUseAudio || isAudioLoading}
-            >
-              <Play size={14} />
-              Play
-            </button>
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => void runAudioCommand({ type: 'AUDIO_PAUSE' })}
-              disabled={!canUseAudio || isAudioLoading || !audioState.isSpeaking || audioState.isPaused}
-            >
-              <Pause size={14} />
-              Pause
-            </button>
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => void runAudioCommand({ type: 'AUDIO_STOP' })}
-              disabled={!canUseAudio || isAudioLoading || (!audioState.isSpeaking && !audioState.isPaused)}
-            >
-              <Square size={14} />
-              Stop
-            </button>
-          </div>
-
-          <div className="audio-slider-row">
-            <label htmlFor="audio-rate" className="audio-slider-label">Speed</label>
-            <input
-              id="audio-rate"
-              type="range"
-              min={0.75}
-              max={2}
-              step={0.05}
-              value={audioRate}
-              onChange={(event) => {
-                void onAudioRateChange(Number(event.target.value));
-              }}
-              disabled={!canUseAudio}
-            />
-            <span className="audio-rate-value">{audioRate.toFixed(2)}x</span>
-          </div>
-
-          <div className="audio-follow-row">
-            <label htmlFor="audio-follow-toggle" className="audio-follow-label">
-              <span>Follow Mode</span>
-              <small>Auto-scroll and center the current spoken line.</small>
-            </label>
-            <button
-              id="audio-follow-toggle"
-              type="button"
-              className="mode-switch"
-              role="switch"
-              aria-checked={audioFollowMode}
-              onClick={() => void toggleAudioFollowMode()}
-              disabled={!canUseAudio}
-            >
-              <span className="mode-switch-track" aria-hidden="true">
-                <span className="mode-switch-knob" />
-              </span>
-              <span className="mode-switch-text">{audioFollowMode ? 'On' : 'Off'}</span>
-            </button>
-          </div>
-
-          <div className="audio-status-card">
-            <p className="audio-status-line"><strong>Status:</strong> {audioState.isPaused ? 'Paused' : audioState.isSpeaking ? 'Speaking' : 'Idle'}</p>
-            <p className="audio-status-line"><strong>{audioLineLabel}</strong></p>
-            {audioState.currentLineText && <p className="audio-current-line">{audioState.currentLineText}</p>}
-          </div>
-
-          <div className="audio-selection-card">
-            <p className="audio-selection-title">Current page selection</p>
-            <p className="audio-selection-text">
-              {audioState.hasSelection
-                ? audioState.selectionText
-                : 'Highlight text on the webpage, then tap "Read Selection".'}
-            </p>
-          </div>
         </section>
       ) : activePane === 'profile' ? (
         <section className="profile-pane">
-          <div className="profile-summary-card">
-            <p className="profile-summary-title">Autofill Profile</p>
-            <p className="profile-summary-note">Saved only in extension local storage for future autofill use.</p>
+          <div className="profile-header">
+            <h2 className="profile-title">Autofill Profile</h2>
+            <p className="profile-note">Saved locally and securely injected into supported forms when explicitly requested.</p>
           </div>
 
           {isProfileLoading ? (
@@ -1764,29 +1766,32 @@ function App() {
                 void saveProfileData();
               }}
             >
-              {profileFieldConfigs.map((field) => (
-                <label key={field.key} className="profile-field">
-                  <span className="profile-field-label">{field.label}</span>
-                  <input
-                    type={field.type ?? 'text'}
-                    autoComplete={field.autoComplete}
-                    className="profile-input"
-                    value={profileForm[field.key]}
-                    onChange={(event) => updateProfileField(field.key, event.target.value)}
-                    disabled={isProfileSaving}
-                  />
-                </label>
-              ))}
+              <div className="profile-fields-container">
+                {profileFieldConfigs.map((field) => (
+                  <label key={field.key} className="profile-field">
+                    <span className="profile-field-label">{field.label}</span>
+                    <input
+                      type={field.type ?? 'text'}
+                      autoComplete={field.autoComplete}
+                      className="profile-input"
+                      value={profileForm[field.key]}
+                      onChange={(event) => updateProfileField(field.key, event.target.value)}
+                      disabled={isProfileSaving}
+                    />
+                  </label>
+                ))}
+              </div>
               <div className="profile-actions">
                 <button
                   type="button"
                   className="ghost-btn"
+                  style={{ flex: 1 }}
                   onClick={() => void clearProfileData()}
                   disabled={isProfileSaving}
                 >
                   Clear
                 </button>
-                <button type="submit" className="primary-btn" disabled={isProfileSaving}>
+                <button type="submit" className="primary-btn" style={{ flex: 1 }} disabled={isProfileSaving}>
                   {isProfileSaving ? <LoaderCircle size={14} className="spin" /> : 'Save'}
                 </button>
               </div>
@@ -1920,7 +1925,6 @@ function App() {
 
       {toast && <p className={`toast toast--${toast.tone}`}>{toast.text}</p>}
       {error && <p className="error-text">{error}</p>}
-      {activeTabUrl && <p className="tab-url">{activeTabUrl}</p>}
 
       <SettingsModal
         open={isSettingsOpen}
