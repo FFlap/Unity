@@ -14,12 +14,20 @@ import {
   insertDictationText,
   type DictationRecognitionLike,
 } from '@/lib/dictation';
+import { parseTimestampLabelToSeconds } from '@/lib/youtube-transcript';
 
 const PANEL_ID = 'unity-youtube-chat-root';
 const MOTION_EXEMPT_ATTR = 'data-unity-motion-exempt';
 const STYLE_ID = 'unity-youtube-chat-style';
+const TIMELINE_MARKER_HOST_ATTR = 'data-unity-source-range-host';
+const TIMELINE_MARKER_LAYER_CLASS = 'unity-yt-source-range-markers';
+const TIMELINE_MARKER_CLASS = 'unity-yt-source-range-marker';
+const TIMELINE_MARKER_TEST_ID = 'unity-timeline-marker';
 const URL_CHECK_INTERVAL_MS = 900;
 const POLL_INTERVAL_MS = 1700;
+const SOURCE_RANGE_FALLBACK_SECONDS = 8;
+const SOURCE_RANGE_MIN_DURATION_SECONDS = 0.2;
+const SOURCE_RANGE_MERGE_GAP_SECONDS = 0.35;
 
 const ext = ((globalThis as any).browser ?? (globalThis as any).chrome) as typeof browser;
 
@@ -38,6 +46,13 @@ interface LocalOptimisticChatMessage extends ChatMessage {
 }
 
 type RenderedChatMessage = ChatMessage | LocalOptimisticChatMessage;
+
+interface TimelineSourceRange {
+  startSec: number;
+  endSec: number;
+  startLabel: string;
+  endLabel: string;
+}
 
 function isWatchUrl(url: string): boolean {
   try {
@@ -132,6 +147,94 @@ function urlsRepresentSameResource(
 function sourceLabel(source: SourceSnippet, index: number): string {
   if (source.timestampLabel) return `Jump ${source.timestampLabel}`;
   return `Source ${index + 1}`;
+}
+
+function formatSecondsLabel(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const rounded = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const secs = rounded % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function parseTimestampRangeLabel(
+  label: string | undefined,
+): { startSec: number; endSec: number; startLabel: string; endLabel: string } | null {
+  if (!label) return null;
+  const cleaned = label.trim();
+  if (!cleaned) return null;
+  const parts = cleaned
+    .split(/\s*[-–—]\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length !== 2) return null;
+
+  const startSec = parseTimestampLabelToSeconds(parts[0]);
+  const endSec = parseTimestampLabelToSeconds(parts[1]);
+  if (
+    startSec == null ||
+    endSec == null ||
+    !Number.isFinite(startSec) ||
+    !Number.isFinite(endSec) ||
+    endSec <= startSec + SOURCE_RANGE_MIN_DURATION_SECONDS
+  ) {
+    return null;
+  }
+
+  return {
+    startSec,
+    endSec,
+    startLabel: parts[0],
+    endLabel: parts[1],
+  };
+}
+
+function hasTimestampSource(source: SourceSnippet): boolean {
+  if (typeof source.timestampSec === 'number' && Number.isFinite(source.timestampSec) && source.timestampSec >= 0) {
+    return true;
+  }
+  if (!source.timestampLabel) return false;
+  if (parseTimestampRangeLabel(source.timestampLabel)) return true;
+  const parsedSingle = parseTimestampLabelToSeconds(source.timestampLabel.trim());
+  return parsedSingle != null && Number.isFinite(parsedSingle) && parsedSingle >= 0;
+}
+
+function mergeTimelineSourceRanges(ranges: TimelineSourceRange[]): TimelineSourceRange[] {
+  if (ranges.length <= 1) return ranges.slice();
+
+  const sorted = [...ranges]
+    .filter((range) =>
+      Number.isFinite(range.startSec) &&
+      Number.isFinite(range.endSec) &&
+      range.endSec > range.startSec + SOURCE_RANGE_MIN_DURATION_SECONDS,
+    )
+    .sort((left, right) => {
+      if (left.startSec !== right.startSec) return left.startSec - right.startSec;
+      return left.endSec - right.endSec;
+    });
+
+  if (sorted.length <= 1) return sorted;
+
+  const merged: TimelineSourceRange[] = [];
+  let current: TimelineSourceRange = { ...sorted[0] };
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const next = sorted[index];
+    if (next.startSec <= current.endSec + SOURCE_RANGE_MERGE_GAP_SECONDS) {
+      if (next.endSec > current.endSec) {
+        current.endSec = next.endSec;
+        current.endLabel = next.endLabel;
+      }
+      continue;
+    }
+    merged.push(current);
+    current = { ...next };
+  }
+
+  merged.push(current);
+  return merged;
 }
 
 function seekVideo(seconds: number): boolean {
@@ -476,6 +579,16 @@ function installStyles() {
       background: var(--unity-panel-bubble-assistant-bg);
       border-bottom-left-radius: 6px;
     }
+    #${PANEL_ID} .unity-bubble--assistant[data-has-source-ranges="true"] {
+      cursor: pointer;
+      transition: box-shadow 0.18s ease;
+    }
+    #${PANEL_ID} .unity-bubble--assistant[data-has-source-ranges="true"]:hover {
+      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+    }
+    #${PANEL_ID} .unity-bubble--assistant[data-range-active="true"] {
+      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45);
+    }
     #${PANEL_ID} .unity-bubble--user.unity-bubble--failed {
       border: 2px solid var(--unity-panel-error);
       background: var(--unity-panel-error-bg);
@@ -698,6 +811,28 @@ function installStyles() {
       color: var(--unity-transcript-text);
       cursor: pointer;
     }
+    .ytp-progress-bar-container[${TIMELINE_MARKER_HOST_ATTR}="true"] {
+      position: relative;
+    }
+    .${TIMELINE_MARKER_LAYER_CLASS} {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+    }
+    .${TIMELINE_MARKER_CLASS} {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      min-width: 2px;
+      border-radius: 999px;
+      background: rgba(255, 242, 0, 0.9);
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.45),
+        0 0 6px rgba(0, 0, 0, 0.22);
+      opacity: 1;
+      z-index: 10000;
+    }
   `;
   document.documentElement.appendChild(style);
 }
@@ -815,8 +950,14 @@ export default defineContentScript({
     let transcriptError: string | null = null;
     let activeTranscriptSegmentId: string | null = null;
     let watchedVideo: HTMLVideoElement | null = null;
+    let timelineMarkerHost: HTMLElement | null = null;
+    let timelineMarkerFingerprint = '';
     let activeTab: 'chat' | 'transcript' = 'chat';
     let localOptimisticMessages: LocalOptimisticChatMessage[] = [];
+    let activeSourceMessageId: string | null = null;
+    let activeSourceMessageRanges: TimelineSourceRange[] = [];
+    let lastSeenAssistantMessageId: string | null = null;
+    let assistantPriorityPrimed = false;
 
     let composerFocused = false;
     let composerSelectionStart = 0;
@@ -836,6 +977,274 @@ export default defineContentScript({
       return [...merged].sort(compareMessagesByCreatedAt);
     };
 
+    const resolveMessageSourceRanges = (sources: SourceSnippet[]): TimelineSourceRange[] => {
+      const orderedSegments = getDisplayTranscriptSegments()
+        .filter((segment) => Number.isFinite(segment.startSec) && segment.startSec >= 0)
+        .sort((left, right) => left.startSec - right.startSec);
+
+      const ranges: TimelineSourceRange[] = [];
+      for (const source of sources) {
+        const rangeFromLabel = parseTimestampRangeLabel(source.timestampLabel);
+        const sourceLabel = source.timestampLabel?.trim() ?? '';
+        const canParseSingleLabel = sourceLabel.length > 0 && !/[-–—]/.test(sourceLabel);
+        const parsedSingleLabelSec = canParseSingleLabel ? parseTimestampLabelToSeconds(sourceLabel) : null;
+        const rawStartSec =
+          typeof source.timestampSec === 'number' &&
+          Number.isFinite(source.timestampSec) &&
+          source.timestampSec >= 0
+            ? source.timestampSec
+            : rangeFromLabel?.startSec ?? (parsedSingleLabelSec ?? null);
+        if (rawStartSec == null) continue;
+
+        const startSec = Math.max(0, rawStartSec);
+        let endSec: number | null = null;
+        let endLabel: string | null = null;
+
+        if (rangeFromLabel && rangeFromLabel.endSec > startSec + SOURCE_RANGE_MIN_DURATION_SECONDS) {
+          endSec = rangeFromLabel.endSec;
+          endLabel = rangeFromLabel.endLabel;
+        } else {
+          const nextSegment = orderedSegments.find(
+            (segment) => segment.startSec > startSec + SOURCE_RANGE_MIN_DURATION_SECONDS,
+          );
+          if (nextSegment) {
+            endSec = nextSegment.startSec;
+            endLabel = nextSegment.startLabel;
+          }
+        }
+
+        if (endSec == null || endSec <= startSec + SOURCE_RANGE_MIN_DURATION_SECONDS) {
+          endSec = startSec + SOURCE_RANGE_FALLBACK_SECONDS;
+          endLabel = formatSecondsLabel(endSec);
+        }
+
+        const startLabel = rangeFromLabel?.startLabel ?? (canParseSingleLabel ? sourceLabel : formatSecondsLabel(startSec));
+        ranges.push({
+          startSec,
+          endSec,
+          startLabel,
+          endLabel: endLabel ?? formatSecondsLabel(endSec),
+        });
+      }
+
+      return mergeTimelineSourceRanges(ranges);
+    };
+
+    const clearSourceTimelineMarkers = (clearActive = false) => {
+      if (timelineMarkerHost) {
+        timelineMarkerHost
+          .querySelector<HTMLElement>(`.${TIMELINE_MARKER_LAYER_CLASS}`)
+          ?.remove();
+        timelineMarkerHost.removeAttribute(TIMELINE_MARKER_HOST_ATTR);
+      } else {
+        const looseLayers = document.querySelectorAll<HTMLElement>(`.${TIMELINE_MARKER_LAYER_CLASS}`);
+        for (const layer of looseLayers) {
+          layer.remove();
+        }
+        const hosts = document.querySelectorAll<HTMLElement>(
+          `.ytp-progress-bar-container[${TIMELINE_MARKER_HOST_ATTR}="true"]`,
+        );
+        for (const host of hosts) {
+          host.removeAttribute(TIMELINE_MARKER_HOST_ATTR);
+        }
+      }
+
+      timelineMarkerHost = null;
+      timelineMarkerFingerprint = '';
+      if (clearActive) {
+        activeSourceMessageId = null;
+        activeSourceMessageRanges = [];
+      }
+    };
+
+    const updateSourceTimelineMarkers = () => {
+      if (!isWatchUrl(location.href) || isYouTubeFullscreen()) {
+        clearSourceTimelineMarkers();
+        return;
+      }
+
+      const video = document.querySelector<HTMLVideoElement>('video');
+      const measuredDurationSec = video?.duration ?? Number.NaN;
+      const transcriptEndSec = getDisplayTranscriptSegments().reduce(
+        (max, segment) => Math.max(max, segment.startSec),
+        0,
+      );
+      const rangeEndSec = activeSourceMessageRanges.reduce(
+        (max, range) => Math.max(max, range.endSec),
+        0,
+      );
+      const inferredDurationSec = Math.max(transcriptEndSec, rangeEndSec);
+      const durationSec =
+        Number.isFinite(measuredDurationSec) && measuredDurationSec > SOURCE_RANGE_MIN_DURATION_SECONDS
+          ? measuredDurationSec
+          : inferredDurationSec > SOURCE_RANGE_MIN_DURATION_SECONDS
+            ? inferredDurationSec
+            : Number.NaN;
+
+      if (
+        !video ||
+        !Number.isFinite(durationSec) ||
+        durationSec <= SOURCE_RANGE_MIN_DURATION_SECONDS ||
+        activeSourceMessageRanges.length === 0
+      ) {
+        clearSourceTimelineMarkers();
+        return;
+      }
+
+      const clampedRanges = mergeTimelineSourceRanges(
+        activeSourceMessageRanges
+          .map((range) => {
+            const maxStart = Math.max(0, durationSec - SOURCE_RANGE_MIN_DURATION_SECONDS);
+            const cappedStart = Math.max(0, Math.min(maxStart, range.startSec));
+            const boundedEnd = Math.max(
+              cappedStart + SOURCE_RANGE_MIN_DURATION_SECONDS,
+              Math.min(durationSec, range.endSec),
+            );
+            const cappedEnd = Math.min(durationSec, boundedEnd);
+            if (cappedEnd <= cappedStart + SOURCE_RANGE_MIN_DURATION_SECONDS) return null;
+            return {
+              ...range,
+              startSec: cappedStart,
+              endSec: cappedEnd,
+            } satisfies TimelineSourceRange;
+          })
+          .filter((range): range is TimelineSourceRange => range != null),
+      );
+      if (clampedRanges.length === 0) {
+        clearSourceTimelineMarkers();
+        return;
+      }
+
+      const player = video.closest<HTMLElement>('.html5-video-player');
+      const nextHost = player?.querySelector<HTMLElement>('.ytp-progress-bar-container') ?? null;
+      if (!nextHost) {
+        clearSourceTimelineMarkers();
+        return;
+      }
+
+      const markerFingerprint = [
+        getVideoIdFromUrl(location.href) ?? '',
+        durationSec.toFixed(3),
+        activeSourceMessageId ?? '',
+        ...clampedRanges.map(
+          (range) => `${range.startSec.toFixed(3)}-${range.endSec.toFixed(3)}:${range.startLabel}:${range.endLabel}`,
+        ),
+      ].join('|');
+
+      if (timelineMarkerHost === nextHost && timelineMarkerFingerprint === markerFingerprint) {
+        return;
+      }
+
+      if (timelineMarkerHost && timelineMarkerHost !== nextHost) {
+        timelineMarkerHost
+          .querySelector<HTMLElement>(`.${TIMELINE_MARKER_LAYER_CLASS}`)
+          ?.remove();
+        timelineMarkerHost.removeAttribute(TIMELINE_MARKER_HOST_ATTR);
+      }
+
+      let layer = nextHost.querySelector<HTMLElement>(`.${TIMELINE_MARKER_LAYER_CLASS}`);
+      if (!layer) {
+        layer = document.createElement('div');
+        layer.className = TIMELINE_MARKER_LAYER_CLASS;
+      }
+      nextHost.appendChild(layer);
+      nextHost.setAttribute(TIMELINE_MARKER_HOST_ATTR, 'true');
+
+      layer.innerHTML = '';
+      for (const range of clampedRanges) {
+        const marker = document.createElement('span');
+        marker.className = TIMELINE_MARKER_CLASS;
+        marker.setAttribute('data-testid', TIMELINE_MARKER_TEST_ID);
+        marker.dataset.messageId = activeSourceMessageId ?? '';
+        marker.dataset.startSec = range.startSec.toFixed(3);
+        marker.dataset.endSec = range.endSec.toFixed(3);
+        marker.title = `${range.startLabel} - ${range.endLabel}`;
+
+        const startPercent = Math.max(0, Math.min(100, (range.startSec / durationSec) * 100));
+        const endPercent = Math.max(0, Math.min(100, (range.endSec / durationSec) * 100));
+        const widthPercent = Math.max(0.25, endPercent - startPercent);
+        marker.style.left = `${startPercent}%`;
+        marker.style.width = `${widthPercent}%`;
+        layer.appendChild(marker);
+      }
+
+      timelineMarkerHost = nextHost;
+      timelineMarkerFingerprint = markerFingerprint;
+    };
+
+    const syncActiveSourceSelection = () => {
+      if (!activeSourceMessageId) return;
+      const messages = getRenderedChatMessages();
+      const activeMessage = messages.find(
+        (message) => message.id === activeSourceMessageId && message.role === 'assistant',
+      );
+      if (!activeMessage) {
+        activeSourceMessageId = null;
+        activeSourceMessageRanges = [];
+        return;
+      }
+
+      const timestampSources = (activeMessage.sources ?? []).filter(hasTimestampSource);
+      if (timestampSources.length === 0) {
+        activeSourceMessageId = null;
+        activeSourceMessageRanges = [];
+        return;
+      }
+
+      activeSourceMessageRanges = resolveMessageSourceRanges(timestampSources);
+      if (activeSourceMessageRanges.length === 0) {
+        activeSourceMessageId = null;
+      }
+    };
+
+    const getLatestAssistantMessage = (
+      messages: RenderedChatMessage[],
+    ): RenderedChatMessage | null => {
+      if (messages.length === 0) return null;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message.role === 'assistant') return message;
+      }
+      return null;
+    };
+
+    const applyLatestAssistantPriority = (options?: { force?: boolean; primeOnly?: boolean }) => {
+      const force = options?.force === true;
+      const primeOnly = options?.primeOnly === true;
+      const messages = getRenderedChatMessages();
+      const latestAssistant = getLatestAssistantMessage(messages);
+
+      if (!latestAssistant) {
+        lastSeenAssistantMessageId = null;
+        if (!primeOnly) {
+          activeSourceMessageId = null;
+          activeSourceMessageRanges = [];
+        }
+        return;
+      }
+
+      if (primeOnly) {
+        lastSeenAssistantMessageId = latestAssistant.id;
+        return;
+      }
+
+      if (!force && lastSeenAssistantMessageId === latestAssistant.id) {
+        return;
+      }
+
+      lastSeenAssistantMessageId = latestAssistant.id;
+      const timestampSources = (latestAssistant.sources ?? []).filter(hasTimestampSource);
+      if (timestampSources.length === 0) {
+        activeSourceMessageId = null;
+        activeSourceMessageRanges = [];
+        return;
+      }
+
+      const ranges = resolveMessageSourceRanges(timestampSources);
+      activeSourceMessageRanges = ranges;
+      activeSourceMessageId = ranges.length > 0 ? latestAssistant.id : null;
+    };
+
     const viewFingerprint = (): string => [
       statusFingerprint(status),
       reportFingerprint(report),
@@ -851,6 +1260,12 @@ export default defineContentScript({
       localError ?? '',
       question,
       activeTab,
+      activeSourceMessageId ?? '',
+      activeSourceMessageRanges
+        .map((range) => `${range.startSec.toFixed(2)}-${range.endSec.toFixed(2)}`)
+        .join(','),
+      lastSeenAssistantMessageId ?? '',
+      assistantPriorityPrimed ? '1' : '0',
     ].join('|');
 
     const ensurePanelMounted = () => {
@@ -860,6 +1275,9 @@ export default defineContentScript({
         }
         localOptimisticMessages = [];
         lastRenderedChatFingerprint = '';
+        lastSeenAssistantMessageId = null;
+        assistantPriorityPrimed = false;
+        clearSourceTimelineMarkers(true);
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -871,6 +1289,7 @@ export default defineContentScript({
         }
         localOptimisticMessages = [];
         lastRenderedChatFingerprint = '';
+        clearSourceTimelineMarkers(true);
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -942,6 +1361,7 @@ export default defineContentScript({
 
     const onVideoTimelineUpdate = () => {
       updateCurrentTranscriptHighlight();
+      updateSourceTimelineMarkers();
     };
 
     const syncVideoListener = () => {
@@ -952,6 +1372,8 @@ export default defineContentScript({
         watchedVideo.removeEventListener('timeupdate', onVideoTimelineUpdate);
         watchedVideo.removeEventListener('seeking', onVideoTimelineUpdate);
         watchedVideo.removeEventListener('seeked', onVideoTimelineUpdate);
+        watchedVideo.removeEventListener('loadedmetadata', onVideoTimelineUpdate);
+        watchedVideo.removeEventListener('durationchange', onVideoTimelineUpdate);
       }
 
       watchedVideo = video;
@@ -959,6 +1381,8 @@ export default defineContentScript({
         watchedVideo.addEventListener('timeupdate', onVideoTimelineUpdate);
         watchedVideo.addEventListener('seeking', onVideoTimelineUpdate);
         watchedVideo.addEventListener('seeked', onVideoTimelineUpdate);
+        watchedVideo.addEventListener('loadedmetadata', onVideoTimelineUpdate);
+        watchedVideo.addEventListener('durationchange', onVideoTimelineUpdate);
       }
     };
 
@@ -1153,10 +1577,15 @@ export default defineContentScript({
 
     const render = () => {
       if (!panelRoot) return;
+      if (assistantPriorityPrimed) {
+        applyLatestAssistantPriority();
+      }
+      syncActiveSourceSelection();
 
       const nextFingerprint = viewFingerprint();
       if (panelRoot.childElementCount > 0 && nextFingerprint === lastRenderedFingerprint) {
         updateCurrentTranscriptHighlight();
+        updateSourceTimelineMarkers();
         return;
       }
       lastRenderedFingerprint = nextFingerprint;
@@ -1287,6 +1716,9 @@ export default defineContentScript({
           for (const message of messages) {
             const bubble = document.createElement('article');
             const isAssistant = message.role === 'assistant';
+            const timestampSources = isAssistant
+              ? (message.sources ?? []).filter(hasTimestampSource)
+              : [];
             const localState =
               !isAssistant && 'localState' in message ? message.localState : undefined;
             const failedState = localState === 'failed' ? 'failed' : undefined;
@@ -1298,6 +1730,11 @@ export default defineContentScript({
               .filter(Boolean)
               .join(' ');
             bubble.dataset.localState = failedState ?? '';
+            bubble.dataset.messageId = message.id;
+            bubble.dataset.role = message.role;
+            bubble.dataset.hasSourceRanges = String(timestampSources.length > 0);
+            bubble.dataset.rangeActive = String(activeSourceMessageId === message.id);
+            bubble.setAttribute('data-testid', 'unity-chat-message');
 
             const bubbleHead = document.createElement('div');
             bubbleHead.className = 'unity-bubble-head';
@@ -1312,6 +1749,15 @@ export default defineContentScript({
             text.textContent = message.text;
 
             bubble.append(bubbleHead, text);
+
+            if (isAssistant && timestampSources.length > 0) {
+              bubble.addEventListener('click', () => {
+                activeSourceMessageId = message.id;
+                activeSourceMessageRanges = resolveMessageSourceRanges(timestampSources);
+                render();
+              });
+            }
+
             if (!isAssistant && failedState) {
               const stateLine = document.createElement('p');
               stateLine.className = `unity-bubble-local-state unity-bubble-local-state--${failedState}`;
@@ -1329,7 +1775,9 @@ export default defineContentScript({
                 sourceBtn.className = 'unity-source';
                 sourceBtn.textContent = sourceLabel(source, index);
                 sourceBtn.title = source.text;
-                sourceBtn.addEventListener('click', () => {
+                sourceBtn.addEventListener('click', (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
                   if (tabId == null) return;
                   void sendRuntimeMessageWithRetry<
                     { type: 'JUMP_TO_SOURCE_SNIPPET'; tabId: number; source: SourceSnippet },
@@ -1399,6 +1847,8 @@ export default defineContentScript({
               }
 
               session = response.session;
+              assistantPriorityPrimed = true;
+              applyLatestAssistantPriority({ force: true });
               localOptimisticMessages = localOptimisticMessages.filter(
                 (message) => message.id !== optimisticMessageId,
               );
@@ -1609,6 +2059,7 @@ export default defineContentScript({
       }
 
       updateCurrentTranscriptHighlight();
+      updateSourceTimelineMarkers();
     };
 
     const onFullscreenChange = () => {
@@ -1620,6 +2071,7 @@ export default defineContentScript({
         }
         localOptimisticMessages = [];
         lastRenderedChatFingerprint = '';
+        clearSourceTimelineMarkers(true);
         panelRoot?.remove();
         panelRoot = null;
         return;
@@ -1631,6 +2083,7 @@ export default defineContentScript({
     };
 
     const applyEmbeddedResponse = (response: EmbeddedStateResponse) => {
+      const previousSessionKey = sessionFingerprint(session);
       tabId = response.tabId ?? tabId;
       const currentUrl = location.href;
       const currentVideoId = getVideoIdFromUrl(currentUrl);
@@ -1663,6 +2116,20 @@ export default defineContentScript({
 
       report = reportMatchesCurrentUrl ? nextReport : null;
       session = sessionMatchesCurrentUrl ? nextSession : null;
+      const nextSessionKey = sessionFingerprint(session);
+      const sessionChanged = previousSessionKey !== nextSessionKey;
+      if (sessionChanged) {
+        if (!assistantPriorityPrimed) {
+          const hasExistingSelection =
+            activeSourceMessageId !== null ||
+            activeSourceMessageRanges.length > 0 ||
+            lastSeenAssistantMessageId !== null;
+          applyLatestAssistantPriority({ primeOnly: !hasExistingSelection });
+          assistantPriorityPrimed = true;
+        } else {
+          applyLatestAssistantPriority();
+        }
+      }
 
       if (report?.transcript?.segments?.length) {
         transcriptSegments = report.transcript.segments;
@@ -1708,6 +2175,7 @@ export default defineContentScript({
           render();
         } else {
           updateCurrentTranscriptHighlight();
+          updateSourceTimelineMarkers();
         }
       } catch {
         // Ignore transient startup issues.
@@ -1743,6 +2211,7 @@ export default defineContentScript({
         render();
       } else {
         updateCurrentTranscriptHighlight();
+        updateSourceTimelineMarkers();
       }
     };
 
@@ -1765,6 +2234,7 @@ export default defineContentScript({
         void loadTranscript();
       } else {
         updateCurrentTranscriptHighlight();
+        updateSourceTimelineMarkers();
       }
     }, POLL_INTERVAL_MS);
 
@@ -1780,8 +2250,13 @@ export default defineContentScript({
             watchedVideo.removeEventListener('timeupdate', onVideoTimelineUpdate);
             watchedVideo.removeEventListener('seeking', onVideoTimelineUpdate);
             watchedVideo.removeEventListener('seeked', onVideoTimelineUpdate);
+            watchedVideo.removeEventListener('loadedmetadata', onVideoTimelineUpdate);
+            watchedVideo.removeEventListener('durationchange', onVideoTimelineUpdate);
             watchedVideo = null;
           }
+          lastSeenAssistantMessageId = null;
+          assistantPriorityPrimed = false;
+          clearSourceTimelineMarkers(true);
           localOptimisticMessages = [];
           lastRenderedChatFingerprint = '';
           panelRoot?.remove();
@@ -1808,6 +2283,11 @@ export default defineContentScript({
         transcriptResolved = false;
         transcriptError = null;
         activeTranscriptSegmentId = null;
+        activeSourceMessageId = null;
+        activeSourceMessageRanges = [];
+        lastSeenAssistantMessageId = null;
+        assistantPriorityPrimed = false;
+        clearSourceTimelineMarkers();
 
         composerFocused = false;
         composerSelectionStart = 0;
@@ -1824,6 +2304,7 @@ export default defineContentScript({
         ensurePanelMounted();
         syncVideoListener();
         updateCurrentTranscriptHighlight();
+        updateSourceTimelineMarkers();
       }
     }, URL_CHECK_INTERVAL_MS);
 
@@ -1835,7 +2316,10 @@ export default defineContentScript({
         watchedVideo.removeEventListener('timeupdate', onVideoTimelineUpdate);
         watchedVideo.removeEventListener('seeking', onVideoTimelineUpdate);
         watchedVideo.removeEventListener('seeked', onVideoTimelineUpdate);
+        watchedVideo.removeEventListener('loadedmetadata', onVideoTimelineUpdate);
+        watchedVideo.removeEventListener('durationchange', onVideoTimelineUpdate);
       }
+      clearSourceTimelineMarkers(true);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', onFullscreenChange as EventListener);
       ext.runtime.onMessage.removeListener(onMessage as any);
