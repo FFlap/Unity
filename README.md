@@ -20,6 +20,14 @@ Unity is a browser extension that makes the internet clearer, more accessible, a
 - Reduced Motion Mode for a calmer experience
 - Lightweight, non-intrusive design that works on top of existing sites
 
+## How we built it
+Unity is a Chrome extension built with TypeScript, React, and WXT. The background service handles scanning, grounded chat, and per-tab session state. Content scripts handle on-page accessibility behaviors like Reader Mode, selection simplify/summarize actions, audio follow mode, and in-page YouTube controls. The popup provides unified controls for chat, reader, audio, profile, and autofill.
+
+For trust and accessibility together, Unity extracts context from the current tab (article text or transcript), ranks evidence snippets, and generates answers constrained to that evidence. If evidence is weak, it avoids confident guessing.
+
+## What’s next for Unity
+Expand dyslexia-focused reading modes with more granular language-level controls. Improve color-blind presets with user-tunable contrast and pattern cues. Strengthen keyboard-first navigation and screen-reader semantics across pop-up and in-page UI. Add deeper transcript navigation tools for long videos. Add privacy-first controls for stored context and retention, so accessibility support stays safe by default.
+
 
 
 ## Setup
