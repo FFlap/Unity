@@ -64,6 +64,30 @@ function getVideoIdFromUrl(url: string): string | null {
   }
 }
 
+function normalizeUrlWithoutHash(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = '';
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return url;
+  }
+}
+
+function urlsRepresentSameResource(
+  leftUrl: string,
+  rightUrl: string,
+  leftVideoId?: string | null,
+  rightVideoId?: string | null,
+): boolean {
+  const resolvedLeftVideoId = leftVideoId ?? getVideoIdFromUrl(leftUrl);
+  const resolvedRightVideoId = rightVideoId ?? getVideoIdFromUrl(rightUrl);
+  if (resolvedLeftVideoId && resolvedRightVideoId) {
+    return resolvedLeftVideoId === resolvedRightVideoId;
+  }
+  return normalizeUrlWithoutHash(leftUrl) === normalizeUrlWithoutHash(rightUrl);
+}
+
 function sourceLabel(source: SourceSnippet, index: number): string {
   if (source.timestampLabel) return `Jump ${source.timestampLabel}`;
   return `Source ${index + 1}`;
@@ -172,38 +196,48 @@ function installStyles() {
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700&display=swap');
     #${PANEL_ID} {
-      --unity-panel-border: rgba(214, 190, 157, 0.7);
-      --unity-panel-bg-start: #fff8ee;
-      --unity-panel-bg-end: #f6ead7;
-      --unity-panel-text: #2b241d;
-      --unity-panel-shadow: rgba(52, 34, 18, 0.12);
-      --unity-panel-head-bg: rgba(255, 252, 247, 0.82);
-      --unity-panel-muted: #6f6152;
-      --unity-panel-btn-border: rgba(196, 167, 130, 0.9);
-      --unity-panel-btn-bg: #fffdf9;
-      --unity-panel-btn-text: #3b3026;
-      --unity-panel-btn-hover: #b86a2e;
-      --unity-panel-scroll-thumb: rgba(190, 160, 126, 0.7);
-      --unity-panel-empty-border: rgba(202, 177, 145, 0.8);
-      --unity-panel-empty-text: #7a6b5b;
-      --unity-panel-bubble-border: rgba(214, 190, 157, 0.8);
-      --unity-panel-bubble-user-bg: #d8ecf7;
-      --unity-panel-bubble-user-border: rgba(136, 181, 205, 0.95);
-      --unity-panel-bubble-assistant-bg: #fff4df;
-      --unity-panel-compose-bg: #fffefb;
-      --unity-panel-error: #b52f2f;
-      --unity-transcript-border: rgba(214, 190, 157, 0.85);
-      --unity-transcript-bg: rgba(255, 253, 248, 0.9);
-      --unity-transcript-row-border: rgba(214, 190, 157, 0.4);
+      --unity-panel-border: #000;
+      --unity-panel-bg-start: #fff;
+      --unity-panel-bg-end: #fff;
+      --unity-panel-text: #000;
+      --unity-panel-shadow: rgba(0, 0, 0, 0.12);
+      --unity-panel-head-bg: #fff;
+      --unity-panel-muted: #aaaaaa;
+      --unity-panel-btn-border: #000;
+      --unity-panel-btn-bg: #fff;
+      --unity-panel-btn-text: #000;
+      --unity-panel-btn-hover: #000;
+      --unity-panel-btn-hover-bg: #000;
+      --unity-panel-btn-hover-text: #fff;
+      --unity-panel-scroll-thumb: rgba(0, 0, 0, 0.35);
+      --unity-panel-empty-border: #000;
+      --unity-panel-empty-text: #555;
+      --unity-panel-bubble-border: #000;
+      --unity-panel-bubble-user-bg: #000;
+      --unity-panel-bubble-user-border: #000;
+      --unity-panel-bubble-user-text: #fff;
+      --unity-panel-bubble-user-muted: #bdbdbd;
+      --unity-panel-bubble-assistant-bg: #e6e6e6;
+      --unity-panel-compose-bg: #fff;
+      --unity-panel-error: #d00;
+      --unity-panel-error-bg: #fff0f0;
+      --unity-panel-dictation-active-border: #000;
+      --unity-panel-dictation-active-bg: #000;
+      --unity-panel-dictation-active-text: #fff;
+      --unity-transcript-border: #000;
+      --unity-transcript-bg: #fff;
+      --unity-transcript-row-border: #d4d4d4;
       --unity-transcript-row-bg: #fff;
-      --unity-transcript-current-border: rgba(184, 106, 46, 0.95);
-      --unity-transcript-current-shadow: rgba(184, 106, 46, 0.22);
-      --unity-transcript-current-bg: #fff8ea;
-      --unity-transcript-btn-bg: #fffefb;
-      --unity-transcript-btn-border: rgba(196, 167, 130, 0.9);
-      --unity-transcript-btn-text: #3b3026;
-      --unity-transcript-text: #3d3024;
+      --unity-transcript-current-border: #000;
+      --unity-transcript-current-shadow: rgba(0, 0, 0, 0.14);
+      --unity-transcript-current-bg: #f5f5f5;
+      --unity-transcript-btn-bg: #fff;
+      --unity-transcript-btn-border: #000;
+      --unity-transcript-btn-text: #000;
+      --unity-transcript-text: #000;
+      --unity-panel-content-height: clamp(360px, 62vh, 620px);
       --unity-focus-ring: transparent;
       --unity-focus-ring-shadow: transparent;
       --unity-transcript-stripe: transparent;
@@ -211,52 +245,65 @@ function installStyles() {
       --unity-transcript-current-outline: transparent;
       width: 100%;
       margin-bottom: 16px;
-      border-radius: 12px;
-      border: 1px solid var(--unity-panel-border);
-      background: linear-gradient(180deg, var(--unity-panel-bg-start) 0%, var(--unity-panel-bg-end) 100%);
+      border-radius: 0;
+      border: 2px solid var(--unity-panel-border);
+      background: var(--unity-panel-bg-start);
       color: var(--unity-panel-text);
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      box-shadow: 0 10px 24px var(--unity-panel-shadow);
+      font-family: 'Plus Jakarta Sans', ui-sans-serif, -apple-system, sans-serif;
+      font-size: 13px;
+      line-height: 1.45;
+      box-shadow: none;
+      display: flex;
+      flex-direction: column;
+      min-height: 640px;
       overflow: hidden;
       z-index: 9998;
     }
     #${PANEL_ID}[data-color-blind-mode="true"] {
-      --unity-panel-border: #77879b;
-      --unity-panel-bg-start: #fcfdff;
-      --unity-panel-bg-end: #ecf2f8;
-      --unity-panel-text: #132132;
-      --unity-panel-shadow: rgba(12, 32, 56, 0.18);
-      --unity-panel-head-bg: #f6faff;
-      --unity-panel-muted: #304255;
-      --unity-panel-btn-border: #6e839a;
-      --unity-panel-btn-bg: #fbfdff;
-      --unity-panel-btn-text: #1a2f46;
-      --unity-panel-btn-hover: #075ead;
-      --unity-panel-scroll-thumb: rgba(73, 101, 133, 0.65);
-      --unity-panel-empty-border: #8ea2b9;
-      --unity-panel-empty-text: #384d64;
-      --unity-panel-bubble-border: #7d92a6;
-      --unity-panel-bubble-user-bg: #e5f0fa;
-      --unity-panel-bubble-user-border: #628ab3;
+      --unity-panel-border: #79889c;
+      --unity-panel-bg-start: #fff;
+      --unity-panel-bg-end: #fff;
+      --unity-panel-text: #14202d;
+      --unity-panel-shadow: rgba(9, 20, 36, 0.18);
+      --unity-panel-head-bg: #f8fbff;
+      --unity-panel-muted: #304256;
+      --unity-panel-btn-border: #79889c;
+      --unity-panel-btn-bg: #fff;
+      --unity-panel-btn-text: #14202d;
+      --unity-panel-btn-hover: #085fae;
+      --unity-panel-btn-hover-bg: #085fae;
+      --unity-panel-btn-hover-text: #fff;
+      --unity-panel-scroll-thumb: #8ea2b9;
+      --unity-panel-empty-border: #79889c;
+      --unity-panel-empty-text: #304256;
+      --unity-panel-bubble-border: #7f92a8;
+      --unity-panel-bubble-user-bg: #e6f0fa;
+      --unity-panel-bubble-user-border: #5f89b7;
+      --unity-panel-bubble-user-text: #14202d;
+      --unity-panel-bubble-user-muted: #4a6078;
       --unity-panel-bubble-assistant-bg: #fff5d8;
-      --unity-panel-compose-bg: #ffffff;
+      --unity-panel-compose-bg: #f7fbff;
       --unity-panel-error: #8f1f2f;
-      --unity-transcript-border: #6f86a1;
+      --unity-panel-error-bg: #f8e8eb;
+      --unity-panel-dictation-active-border: #085fae;
+      --unity-panel-dictation-active-bg: #085fae;
+      --unity-panel-dictation-active-text: #fff;
+      --unity-transcript-border: #79889c;
       --unity-transcript-bg: #f8fbff;
-      --unity-transcript-row-border: #93a5ba;
-      --unity-transcript-row-bg: #ffffff;
-      --unity-transcript-current-border: #0b5da8;
-      --unity-transcript-current-shadow: rgba(11, 93, 168, 0.32);
-      --unity-transcript-current-bg: #e7f0fb;
-      --unity-transcript-btn-bg: #ffffff;
-      --unity-transcript-btn-border: #6e839a;
-      --unity-transcript-btn-text: #1d344b;
-      --unity-transcript-text: #16283d;
+      --unity-transcript-row-border: #cfdcec;
+      --unity-transcript-row-bg: #fff;
+      --unity-transcript-current-border: #085fae;
+      --unity-transcript-current-shadow: rgba(8, 95, 174, 0.24);
+      --unity-transcript-current-bg: #e8f1fb;
+      --unity-transcript-btn-bg: #fff;
+      --unity-transcript-btn-border: #7088a1;
+      --unity-transcript-btn-text: #14202d;
+      --unity-transcript-text: #14202d;
       --unity-focus-ring: #005fcc;
-      --unity-focus-ring-shadow: rgba(0, 95, 204, 0.28);
-      --unity-transcript-stripe: #8ea2b9;
+      --unity-focus-ring-shadow: rgba(0, 95, 204, 0.3);
+      --unity-transcript-stripe: #7f92a8;
       --unity-transcript-current-stripe: #005fcc;
-      --unity-transcript-current-outline: rgba(0, 95, 204, 0.3);
+      --unity-transcript-current-outline: rgba(0, 95, 204, 0.28);
     }
     #${PANEL_ID}[data-unity-floating="true"] {
       position: fixed;
@@ -264,7 +311,7 @@ function installStyles() {
       right: 12px;
       width: min(380px, calc(100vw - 24px));
       max-height: 78vh;
-      overflow: auto;
+      min-height: 0;
       margin: 0;
       z-index: 2147483000;
     }
@@ -273,58 +320,58 @@ function installStyles() {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--unity-panel-border);
+      gap: 12px;
+      padding: 24px 24px 8px;
+      border-bottom: none;
       background: var(--unity-panel-head-bg);
+    }
+    #${PANEL_ID} .unity-head-title {
+      flex: 1;
+      min-width: 0;
     }
     #${PANEL_ID} .unity-title {
       margin: 0;
-      font-size: 13px;
+      font-size: 3rem;
       font-weight: 700;
-      letter-spacing: 0.01em;
-    }
-    #${PANEL_ID} .unity-status {
-      margin: 2px 0 0;
-      font-size: 11px;
-      color: var(--unity-panel-muted);
+      letter-spacing: -0.04em;
+      line-height: 1;
     }
     #${PANEL_ID} .unity-head-actions {
       display: flex;
-      gap: 6px;
+      gap: 12px;
     }
-    #${PANEL_ID} .unity-btn {
-      border: 1px solid var(--unity-panel-btn-border);
+    #${PANEL_ID} .unity-icon-btn {
+      border: 2px solid var(--unity-panel-btn-border);
       background: var(--unity-panel-btn-bg);
       color: var(--unity-panel-btn-text);
-      border-radius: 8px;
-      padding: 6px 8px;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    #${PANEL_ID} .unity-btn--icon {
-      width: 30px;
-      height: 30px;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
       padding: 0;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
     }
     #${PANEL_ID} .unity-btn-icon {
-      width: 14px;
-      height: 14px;
+      width: 18px;
+      height: 18px;
       display: block;
     }
     #${PANEL_ID} .unity-spin {
       animation: unity-spin 0.9s linear infinite;
     }
-    #${PANEL_ID} .unity-btn:hover:not(:disabled) {
+    #${PANEL_ID} .unity-icon-btn:hover:not(:disabled) {
       border-color: var(--unity-panel-btn-hover);
-      color: var(--unity-panel-btn-hover);
+      background: var(--unity-panel-btn-hover-bg);
+      color: var(--unity-panel-btn-hover-text);
     }
-    #${PANEL_ID} .unity-btn:disabled { opacity: 0.5; cursor: default; }
-    #${PANEL_ID}[data-color-blind-mode="true"] .unity-btn:hover:not(:disabled),
+    #${PANEL_ID} .unity-icon-btn:disabled { opacity: 0.5; cursor: default; }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-icon-btn:hover:not(:disabled),
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-source:hover:not(:disabled),
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-ts-btn:hover:not(:disabled) {
       border-width: 2px;
@@ -336,23 +383,73 @@ function installStyles() {
       to { transform: rotate(360deg); }
     }
     #${PANEL_ID} .unity-body {
-      padding: 10px 12px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      flex: 1;
+      min-height: 0;
+      padding: 0;
+      gap: 0;
     }
     #${PANEL_ID} .unity-note {
       margin: 0;
-      font-size: 11px;
+      padding: 10px 24px 0;
+      font-size: 13px;
       color: var(--unity-panel-muted);
     }
+    #${PANEL_ID} .unity-tabs {
+      display: flex;
+      gap: 16px;
+      margin: 0;
+      padding: 0 24px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 2px solid var(--unity-panel-border);
+      overflow-x: auto;
+      scrollbar-width: none;
+      background: var(--unity-panel-head-bg);
+    }
+    #${PANEL_ID} .unity-tabs::-webkit-scrollbar { display: none; }
+    #${PANEL_ID} .unity-tab {
+      border: none;
+      background: transparent;
+      color: var(--unity-panel-muted);
+      padding: 0;
+      margin: 0;
+      font-size: inherit;
+      font-weight: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: color 0.2s ease;
+    }
+    #${PANEL_ID} .unity-tab[data-active="true"],
+    #${PANEL_ID} .unity-tab:hover {
+      color: var(--unity-panel-text);
+    }
+    #${PANEL_ID}[data-color-blind-mode="true"] .unity-tab[data-active="true"] {
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    #${PANEL_ID} .unity-tab-panel {
+      height: var(--unity-panel-content-height);
+      min-height: var(--unity-panel-content-height);
+      max-height: var(--unity-panel-content-height);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
     #${PANEL_ID} .unity-chat {
-      max-height: 260px;
+      flex: 1;
+      min-height: 0;
       overflow: auto;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      padding-right: 2px;
+      gap: 10px;
+      padding: 24px;
+      font-size: 12px;
     }
     #${PANEL_ID} .unity-chat::-webkit-scrollbar,
     #${PANEL_ID} .unity-transcript::-webkit-scrollbar { width: 8px; }
@@ -362,47 +459,68 @@ function installStyles() {
       border-radius: 999px;
     }
     #${PANEL_ID} .unity-empty {
-      border: 1px dashed var(--unity-panel-empty-border);
-      border-radius: 10px;
-      padding: 10px;
+      border: 2px dashed var(--unity-panel-empty-border);
+      border-radius: 16px;
+      padding: 24px;
       color: var(--unity-panel-empty-text);
       font-size: 12px;
       margin: 0;
+      text-align: center;
     }
     #${PANEL_ID} .unity-bubble {
-      border-radius: 10px;
-      border: 1px solid var(--unity-panel-bubble-border);
-      padding: 8px 9px;
-      font-size: 12px;
-      line-height: 1.42;
+      border-radius: 20px;
+      border: none;
+      padding: 16px 20px;
+      max-width: 85%;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
     #${PANEL_ID} .unity-bubble--user {
+      align-self: flex-end;
+      text-align: right;
+      align-items: flex-end;
       background: var(--unity-panel-bubble-user-bg);
-      border-color: var(--unity-panel-bubble-user-border);
+      color: var(--unity-panel-bubble-user-text);
+      border-bottom-right-radius: 6px;
+      margin-bottom: 24px;
     }
     #${PANEL_ID} .unity-bubble--assistant {
+      align-self: flex-start;
+      text-align: left;
+      align-items: flex-start;
       background: var(--unity-panel-bubble-assistant-bg);
+      border-bottom-left-radius: 6px;
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--user,
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--assistant {
       border-left: 4px solid;
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--user {
-      border-left-color: #0d4d8a;
+      border-left-color: var(--unity-panel-bubble-user-border);
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-bubble--assistant {
-      border-left-color: #8a6a00;
+      border-left-color: var(--unity-panel-btn-hover);
     }
     #${PANEL_ID} .unity-bubble-head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      font-size: 10px;
+      gap: 10px;
+      font-size: 12px;
+      font-weight: 700;
       color: var(--unity-panel-muted);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
-      margin-bottom: 4px;
+      letter-spacing: 0.05em;
+    }
+    #${PANEL_ID} .unity-bubble-text {
+      margin: 0;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.5;
+      font-weight: 400;
+    }
+    #${PANEL_ID} .unity-bubble--user .unity-bubble-head {
+      color: var(--unity-panel-bubble-user-muted);
     }
     #${PANEL_ID} .unity-source-row {
       display: flex;
@@ -411,64 +529,117 @@ function installStyles() {
       margin-top: 7px;
     }
     #${PANEL_ID} .unity-source {
-      border: 1px solid var(--unity-panel-btn-border);
+      border: 2px solid var(--unity-panel-btn-border);
       border-radius: 999px;
       background: var(--unity-panel-btn-bg);
       color: var(--unity-panel-btn-text);
-      padding: 3px 8px;
-      font-size: 11px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
       cursor: pointer;
+      transition: all 0.2s ease;
     }
     #${PANEL_ID} .unity-source:hover {
       border-color: var(--unity-panel-btn-hover);
-      color: var(--unity-panel-btn-hover);
+      background: var(--unity-panel-btn-hover-bg);
+      color: var(--unity-panel-btn-hover-text);
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-source {
       border-width: 2px;
       text-decoration: underline;
       text-underline-offset: 2px;
     }
+    #${PANEL_ID} .unity-compose {
+      border-top: 2px solid var(--unity-panel-border);
+      background: var(--unity-panel-compose-bg);
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
     #${PANEL_ID} .unity-compose textarea {
       width: 100%;
-      min-height: 56px;
-      border-radius: 10px;
-      border: 1px solid var(--unity-panel-btn-border);
-      background: var(--unity-panel-compose-bg);
+      min-height: 48px;
+      border: none;
+      border-bottom: 2px solid var(--unity-panel-muted);
+      border-radius: 0;
+      background: transparent;
       color: var(--unity-panel-text);
       font-size: 12px;
       line-height: 1.4;
-      padding: 8px;
-      resize: vertical;
+      padding: 0 0 8px;
+      resize: none;
       font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+    #${PANEL_ID} .unity-compose textarea:focus {
+      border-bottom-color: var(--unity-panel-btn-border);
     }
     #${PANEL_ID} .unity-compose-actions {
-      margin-top: 7px;
       display: flex;
       align-items: center;
-      justify-content: flex-end;
-      gap: 6px;
+      justify-content: space-between;
+      gap: 12px;
     }
-    #${PANEL_ID} .unity-btn--dictation {
-      width: 30px;
-      height: 30px;
-      padding: 0;
+    #${PANEL_ID} .unity-compose-submit-actions {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
+      gap: 12px;
     }
-    #${PANEL_ID} .unity-btn--dictation[data-active="true"] {
-      border-color: #b86a2e;
-      background: #fbe9d3;
-      color: #9d4f16;
+    #${PANEL_ID} .unity-ghost-btn,
+    #${PANEL_ID} .unity-primary-btn {
+      border: 2px solid var(--unity-panel-btn-border);
+      border-radius: 20px;
+      background: transparent;
+      color: var(--unity-panel-text);
+      padding: 8px 16px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-height: 40px;
+    }
+    #${PANEL_ID} .unity-ghost-btn:hover:not(:disabled) {
+      background: var(--unity-panel-btn-hover-bg);
+      color: var(--unity-panel-btn-hover-text);
+    }
+    #${PANEL_ID} .unity-primary-btn {
+      background: var(--unity-panel-text);
+      color: var(--unity-panel-btn-bg);
+      min-width: 124px;
+    }
+    #${PANEL_ID} .unity-primary-btn:hover:not(:disabled) {
+      background: var(--unity-panel-btn-hover-bg);
+      color: var(--unity-panel-btn-hover-text);
+    }
+    #${PANEL_ID} .unity-ghost-btn:disabled,
+    #${PANEL_ID} .unity-primary-btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    #${PANEL_ID} .unity-icon-btn--dictation {
+      width: 34px;
+      height: 34px;
+    }
+    #${PANEL_ID} .unity-icon-btn--dictation[data-active="true"] {
+      border-color: var(--unity-panel-dictation-active-border);
+      background: var(--unity-panel-dictation-active-bg);
+      color: var(--unity-panel-dictation-active-text);
     }
     #${PANEL_ID} .unity-error {
-      margin: 0;
+      margin: 10px 24px;
       font-size: 11px;
       color: var(--unity-panel-error);
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-error {
       border-left: 4px solid var(--unity-panel-error);
-      background: rgba(143, 31, 47, 0.09);
+      background: var(--unity-panel-error-bg);
       padding: 6px 8px;
       border-radius: 8px;
       font-weight: 600;
@@ -479,30 +650,32 @@ function installStyles() {
     #${PANEL_ID} .unity-transcript-head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: 8px;
-      margin-top: 2px;
+      padding: 20px 24px 8px;
     }
     #${PANEL_ID} .unity-transcript-title {
       margin: 0;
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: var(--unity-panel-btn-text);
+      color: var(--unity-panel-text);
     }
     #${PANEL_ID} .unity-transcript-meta {
       margin: 0;
-      font-size: 11px;
+      font-size: 12px;
       color: var(--unity-panel-muted);
     }
     #${PANEL_ID} .unity-transcript {
-      max-height: 220px;
+      flex: 1;
+      min-height: 0;
       overflow: auto;
-      border: 1px solid var(--unity-transcript-border);
+      border: 2px solid var(--unity-transcript-border);
       border-radius: 10px;
       background: var(--unity-transcript-bg);
-      padding: 6px;
+      margin: 0 24px 24px;
+      padding: 8px;
       display: flex;
       flex-direction: column;
       gap: 4px;
@@ -514,7 +687,7 @@ function installStyles() {
       align-items: start;
       border: 1px solid var(--unity-transcript-row-border);
       border-radius: 8px;
-      padding: 6px;
+      padding: 8px;
       background: var(--unity-transcript-row-bg);
     }
     #${PANEL_ID}[data-color-blind-mode="true"] .unity-transcript-row {
@@ -532,25 +705,27 @@ function installStyles() {
       outline-offset: 1px;
     }
     #${PANEL_ID} .unity-ts-btn {
-      border: 1px solid var(--unity-transcript-btn-border);
+      border: 2px solid var(--unity-transcript-btn-border);
       background: var(--unity-transcript-btn-bg);
       color: var(--unity-transcript-btn-text);
-      border-radius: 7px;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 4px 6px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 8px;
       cursor: pointer;
       white-space: nowrap;
-      min-width: 52px;
+      min-width: 58px;
       text-align: center;
+      transition: all 0.2s ease;
     }
     #${PANEL_ID} .unity-ts-btn:hover {
       border-color: var(--unity-panel-btn-hover);
-      color: var(--unity-panel-btn-hover);
+      background: var(--unity-panel-btn-hover-bg);
+      color: var(--unity-panel-btn-hover-text);
     }
     #${PANEL_ID} .unity-transcript-text {
       margin: 0;
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.4;
       color: var(--unity-transcript-text);
       cursor: pointer;
@@ -684,6 +859,7 @@ export default defineContentScript({
     let activeTranscriptSegmentId: string | null = null;
     let watchedVideo: HTMLVideoElement | null = null;
     let colorBlindModeEnabled = false;
+    let activeTab: 'chat' | 'transcript' = 'chat';
 
     let composerFocused = false;
     let composerSelectionStart = 0;
@@ -714,6 +890,7 @@ export default defineContentScript({
       localError ?? '',
       question,
       colorBlindModeEnabled ? '1' : '0',
+      activeTab,
     ].join('|');
 
     const ensurePanelMounted = () => {
@@ -1023,20 +1200,18 @@ export default defineContentScript({
       head.className = 'unity-head';
 
       const titleWrap = document.createElement('div');
+      titleWrap.className = 'unity-head-title';
       const title = document.createElement('p');
       title.className = 'unity-title';
       title.textContent = 'Unity';
-      const statusLine = document.createElement('p');
-      statusLine.className = 'unity-status';
-      statusLine.textContent = status.message;
-      titleWrap.append(title, statusLine);
+      titleWrap.append(title);
 
       const headActions = document.createElement('div');
       headActions.className = 'unity-head-actions';
 
       const isScanning = status.state === 'extracting' || status.state === 'analyzing';
       const scanBtn = document.createElement('button');
-      scanBtn.className = 'unity-btn unity-btn--icon';
+      scanBtn.className = 'unity-icon-btn';
       scanBtn.type = 'button';
       scanBtn.title = isScanning ? 'Scanning...' : 'Scan';
       scanBtn.setAttribute('aria-label', isScanning ? 'Scanning' : 'Scan');
@@ -1057,12 +1232,7 @@ export default defineContentScript({
         })();
       });
 
-      const clearBtn = document.createElement('button');
-      clearBtn.className = 'unity-btn';
-      clearBtn.type = 'button';
-      clearBtn.textContent = 'Clear';
-      clearBtn.disabled = (session?.messages.length ?? 0) === 0;
-      clearBtn.addEventListener('click', () => {
+      const clearChat = () => {
         if (tabId == null) return;
         void (async () => {
           localError = null;
@@ -1077,273 +1247,316 @@ export default defineContentScript({
           }
           render();
         })();
-      });
+      };
 
-      headActions.append(scanBtn, clearBtn);
+      headActions.append(scanBtn);
       head.append(titleWrap, headActions);
 
       const body = document.createElement('div');
       body.className = 'unity-body';
 
-      const note = document.createElement('p');
-      note.className = 'unity-note';
-      const snippetCount = report?.snippetCount ?? 0;
-      note.textContent = snippetCount > 0
-        ? 'Context ready for grounded Q&A.'
-        : 'Run scan to prepare grounded context.';
-      body.appendChild(note);
+      const tabs = document.createElement('div');
+      tabs.className = 'unity-tabs';
+      tabs.setAttribute('role', 'tablist');
+      tabs.setAttribute('aria-label', 'Panel sections');
 
-      if (report?.transcript?.unavailableReason && !transcriptLoading) {
-        const transcriptWarning = document.createElement('p');
-        transcriptWarning.className = 'unity-note';
-        transcriptWarning.textContent = `Transcript note: ${report.transcript.unavailableReason}`;
-        body.appendChild(transcriptWarning);
-      }
+      const chatTab = document.createElement('button');
+      chatTab.type = 'button';
+      chatTab.className = 'unity-tab';
+      chatTab.dataset.active = String(activeTab === 'chat');
+      chatTab.setAttribute('role', 'tab');
+      chatTab.setAttribute('aria-selected', String(activeTab === 'chat'));
+      chatTab.textContent = 'Chat';
+      chatTab.addEventListener('click', () => {
+        if (activeTab === 'chat') return;
+        activeTab = 'chat';
+        composerFocused = true;
+        render();
+      });
 
-      const chat = document.createElement('div');
-      chat.className = 'unity-chat';
-      chat.setAttribute('data-testid', 'unity-chat-list');
+      const transcriptTab = document.createElement('button');
+      transcriptTab.type = 'button';
+      transcriptTab.className = 'unity-tab';
+      transcriptTab.dataset.active = String(activeTab === 'transcript');
+      transcriptTab.setAttribute('role', 'tab');
+      transcriptTab.setAttribute('aria-selected', String(activeTab === 'transcript'));
+      transcriptTab.textContent = 'Transcript';
+      transcriptTab.addEventListener('click', () => {
+        if (activeTab === 'transcript') return;
+        activeTab = 'transcript';
+        composerFocused = false;
+        render();
+      });
 
-      const messages = session?.messages ?? [];
-      if (messages.length === 0) {
-        const empty = document.createElement('p');
-        empty.className = 'unity-empty';
-        empty.textContent = 'Ask about this video. Answers are grounded in transcript/page context only.';
-        chat.appendChild(empty);
-      } else {
-        for (const message of messages) {
-          const bubble = document.createElement('article');
-          bubble.className = `unity-bubble unity-bubble--${message.role === 'assistant' ? 'assistant' : 'user'}`;
+      tabs.append(chatTab, transcriptTab);
+      body.appendChild(tabs);
 
-          const bubbleHead = document.createElement('div');
-          bubbleHead.className = 'unity-bubble-head';
-          const speaker = document.createElement('span');
-          speaker.textContent = message.role === 'assistant' ? 'Unity' : 'You';
-          const ts = document.createElement('span');
-          ts.textContent = formatTime(message.createdAt);
-          bubbleHead.append(speaker, ts);
+      let input: HTMLTextAreaElement | null = null;
+      if (activeTab === 'chat') {
+        const chatPanel = document.createElement('section');
+        chatPanel.className = 'unity-tab-panel unity-tab-panel--chat';
 
-          const text = document.createElement('p');
-          text.textContent = message.text;
-          text.style.margin = '0';
+        const chat = document.createElement('div');
+        chat.className = 'unity-chat';
+        chat.setAttribute('data-testid', 'unity-chat-list');
 
-          bubble.append(bubbleHead, text);
+        const messages = session?.messages ?? [];
+        if (messages.length > 0) {
+          for (const message of messages) {
+            const bubble = document.createElement('article');
+            bubble.className = `unity-bubble unity-bubble--${message.role === 'assistant' ? 'assistant' : 'user'}`;
 
-          if (message.role === 'assistant' && (message.sources?.length ?? 0) > 0) {
-            const sourceRow = document.createElement('div');
-            sourceRow.className = 'unity-source-row';
-            for (let index = 0; index < (message.sources?.length ?? 0); index += 1) {
-              const source = message.sources![index];
-              const sourceBtn = document.createElement('button');
-              sourceBtn.type = 'button';
-              sourceBtn.className = 'unity-source';
-              sourceBtn.textContent = sourceLabel(source, index);
-              sourceBtn.title = source.text;
-              sourceBtn.addEventListener('click', () => {
-                if (tabId == null) return;
-                void sendRuntimeMessageWithRetry<
-                  { type: 'JUMP_TO_SOURCE_SNIPPET'; tabId: number; source: SourceSnippet },
-                  { ok: boolean }
-                >({
-                  type: 'JUMP_TO_SOURCE_SNIPPET',
-                  tabId,
-                  source,
-                }).catch(() => {
-                  localError = 'Could not jump to the selected source.';
-                  render();
+            const bubbleHead = document.createElement('div');
+            bubbleHead.className = 'unity-bubble-head';
+            const speaker = document.createElement('span');
+            speaker.textContent = message.role === 'assistant' ? 'Unity' : 'You';
+            const ts = document.createElement('span');
+            ts.textContent = formatTime(message.createdAt);
+            bubbleHead.append(speaker, ts);
+
+            const text = document.createElement('p');
+            text.className = 'unity-bubble-text';
+            text.textContent = message.text;
+
+            bubble.append(bubbleHead, text);
+
+            if (message.role === 'assistant' && (message.sources?.length ?? 0) > 0) {
+              const sourceRow = document.createElement('div');
+              sourceRow.className = 'unity-source-row';
+              for (let index = 0; index < (message.sources?.length ?? 0); index += 1) {
+                const source = message.sources![index];
+                const sourceBtn = document.createElement('button');
+                sourceBtn.type = 'button';
+                sourceBtn.className = 'unity-source';
+                sourceBtn.textContent = sourceLabel(source, index);
+                sourceBtn.title = source.text;
+                sourceBtn.addEventListener('click', () => {
+                  if (tabId == null) return;
+                  void sendRuntimeMessageWithRetry<
+                    { type: 'JUMP_TO_SOURCE_SNIPPET'; tabId: number; source: SourceSnippet },
+                    { ok: boolean }
+                  >({
+                    type: 'JUMP_TO_SOURCE_SNIPPET',
+                    tabId,
+                    source,
+                  }).catch(() => {
+                    localError = 'Could not jump to the selected source.';
+                    render();
+                  });
                 });
-              });
-              sourceRow.appendChild(sourceBtn);
+                sourceRow.appendChild(sourceBtn);
+              }
+              bubble.appendChild(sourceRow);
             }
-            bubble.appendChild(sourceRow);
+
+            chat.appendChild(bubble);
+          }
+        }
+
+        chatPanel.appendChild(chat);
+
+        const compose = document.createElement('form');
+        compose.className = 'unity-compose';
+        compose.addEventListener('submit', (event) => {
+          event.preventDefault();
+          if (isAsking || !question.trim()) return;
+          if (dictationActive) {
+            stopDictation();
           }
 
-          chat.appendChild(bubble);
-        }
-      }
+          void (async () => {
+            isAsking = true;
+            localError = null;
+            render();
 
-      body.appendChild(chat);
+            try {
+              const response = await sendRuntimeMessageWithRetry<
+                { type: 'ASK_CHAT_QUESTION'; question: string; tabId?: number },
+                { ok: boolean; session?: ChatSession; error?: string }
+              >({
+                type: 'ASK_CHAT_QUESTION',
+                question: question.trim(),
+                ...(tabId ? { tabId } : {}),
+              });
 
-      const compose = document.createElement('form');
-      compose.className = 'unity-compose';
-      compose.addEventListener('submit', (event) => {
-        event.preventDefault();
-        if (isAsking || !question.trim()) return;
-        if (dictationActive) {
-          stopDictation();
-        }
+              if (!response.ok || !response.session) {
+                throw new Error(response.error || 'Failed to answer question.');
+              }
 
-        void (async () => {
-          isAsking = true;
-          localError = null;
-          render();
-
-          try {
-            const response = await sendRuntimeMessageWithRetry<
-              { type: 'ASK_CHAT_QUESTION'; question: string; tabId?: number },
-              { ok: boolean; session?: ChatSession; error?: string }
-            >({
-              type: 'ASK_CHAT_QUESTION',
-              question: question.trim(),
-              ...(tabId ? { tabId } : {}),
-            });
-
-            if (!response.ok || !response.session) {
-              throw new Error(response.error || 'Failed to answer question.');
+              session = response.session;
+              question = '';
+              composerSelectionStart = 0;
+              composerSelectionEnd = 0;
+            } catch (error) {
+              localError = error instanceof Error ? error.message : 'Question failed.';
+            } finally {
+              isAsking = false;
+              render();
             }
+          })();
+        });
 
-            session = response.session;
-            question = '';
-            composerSelectionStart = 0;
-            composerSelectionEnd = 0;
+        const composeInput = document.createElement('textarea');
+        composeInput.value = question;
+        composeInput.placeholder = 'Ask a question about this video...';
+        composeInput.disabled = isAsking;
+        composeInput.setAttribute('data-testid', 'unity-composer-input');
+        let askButton: HTMLButtonElement | null = null;
+        const syncAskButtonState = () => {
+          if (!askButton) return;
+          askButton.disabled = isAsking || !question.trim();
+        };
+        composeInput.addEventListener('focus', () => {
+          composerFocused = true;
+          captureComposerSelection(composeInput);
+        });
+        composeInput.addEventListener('blur', () => {
+          composerFocused = false;
+        });
+        composeInput.addEventListener('input', () => {
+          question = composeInput.value;
+          captureComposerSelection(composeInput);
+          syncAskButtonState();
+        });
+        composeInput.addEventListener('keyup', () => {
+          captureComposerSelection(composeInput);
+        });
+        composeInput.addEventListener('click', () => {
+          captureComposerSelection(composeInput);
+        });
+        composeInput.addEventListener('select', () => {
+          captureComposerSelection(composeInput);
+        });
+
+        const composeActions = document.createElement('div');
+        composeActions.className = 'unity-compose-actions';
+
+        const clearChatButton = document.createElement('button');
+        clearChatButton.type = 'button';
+        clearChatButton.className = 'unity-ghost-btn';
+        clearChatButton.textContent = 'Clear';
+        clearChatButton.disabled = (session?.messages.length ?? 0) === 0;
+        clearChatButton.addEventListener('click', clearChat);
+
+        const dictationButton = document.createElement('button');
+        dictationButton.type = 'button';
+        dictationButton.className = 'unity-icon-btn unity-icon-btn--dictation';
+        dictationButton.dataset.active = String(dictationActive);
+        const dictationTitle = !dictationSupported
+          ? 'Voice dictation is unavailable in this browser.'
+          : dictationActive
+            ? 'Stop voice dictation'
+            : 'Start voice dictation';
+        dictationButton.title = dictationTitle;
+        dictationButton.setAttribute('aria-label', dictationTitle);
+        dictationButton.disabled = isAsking || !dictationSupported;
+        dictationButton.appendChild(createMicIcon(dictationActive));
+        dictationButton.addEventListener('click', () => {
+          if (!dictation || !dictationSupported) return;
+          localError = null;
+          try {
+            if (dictationActive) {
+              dictation.stop();
+            } else {
+              dictation.start();
+            }
           } catch (error) {
-            localError = error instanceof Error ? error.message : 'Question failed.';
-          } finally {
-            isAsking = false;
+            dictationActive = false;
+            localError = error instanceof Error ? error.message : dictationErrorMessage();
             render();
           }
-        })();
-      });
+        });
 
-      const input = document.createElement('textarea');
-      input.value = question;
-      input.placeholder = 'Ask a grounded question about this video...';
-      input.disabled = isAsking;
-      input.setAttribute('data-testid', 'unity-composer-input');
-      let askButton: HTMLButtonElement | null = null;
-      const syncAskButtonState = () => {
-        if (!askButton) return;
-        askButton.disabled = isAsking || !question.trim();
-      };
-      input.addEventListener('focus', () => {
-        composerFocused = true;
-        captureComposerSelection(input);
-      });
-      input.addEventListener('blur', () => {
-        composerFocused = false;
-      });
-      input.addEventListener('input', () => {
-        question = input.value;
-        captureComposerSelection(input);
+        askButton = document.createElement('button');
+        askButton.type = 'submit';
+        askButton.className = 'unity-primary-btn';
+        askButton.textContent = isAsking ? 'Asking...' : 'Ask';
         syncAskButtonState();
-      });
-      input.addEventListener('keyup', () => {
-        captureComposerSelection(input);
-      });
-      input.addEventListener('click', () => {
-        captureComposerSelection(input);
-      });
-      input.addEventListener('select', () => {
-        captureComposerSelection(input);
-      });
 
-      const composeActions = document.createElement('div');
-      composeActions.className = 'unity-compose-actions';
+        const composeSubmitActions = document.createElement('div');
+        composeSubmitActions.className = 'unity-compose-submit-actions';
+        composeSubmitActions.append(dictationButton, askButton);
+        composeActions.append(clearChatButton, composeSubmitActions);
 
-      const dictationButton = document.createElement('button');
-      dictationButton.type = 'button';
-      dictationButton.className = 'unity-btn unity-btn--dictation';
-      dictationButton.dataset.active = String(dictationActive);
-      const dictationTitle = !dictationSupported
-        ? 'Voice dictation is unavailable in this browser.'
-        : dictationActive
-          ? 'Stop voice dictation'
-          : 'Start voice dictation';
-      dictationButton.title = dictationTitle;
-      dictationButton.setAttribute('aria-label', dictationTitle);
-      dictationButton.disabled = isAsking || !dictationSupported;
-      dictationButton.appendChild(createMicIcon(dictationActive));
-      dictationButton.addEventListener('click', () => {
-        if (!dictation || !dictationSupported) return;
-        localError = null;
-        try {
-          if (dictationActive) {
-            dictation.stop();
-          } else {
-            dictation.start();
-          }
-        } catch (error) {
-          dictationActive = false;
-          localError = error instanceof Error ? error.message : dictationErrorMessage();
-          render();
-        }
-      });
-
-      askButton = document.createElement('button');
-      askButton.type = 'submit';
-      askButton.className = 'unity-btn';
-      askButton.textContent = isAsking ? 'Asking...' : 'Ask';
-      syncAskButtonState();
-      composeActions.append(dictationButton, askButton);
-
-      compose.append(input, composeActions);
-      body.appendChild(compose);
-
-      const transcriptHead = document.createElement('div');
-      transcriptHead.className = 'unity-transcript-head';
-      const transcriptTitle = document.createElement('p');
-      transcriptTitle.className = 'unity-transcript-title';
-      transcriptTitle.textContent = 'Transcript';
-      const transcriptMeta = document.createElement('p');
-      transcriptMeta.className = 'unity-transcript-meta';
-      transcriptMeta.textContent = transcriptLoading
-        ? 'Loading...'
-        : `${getDisplayTranscriptSegments().length} lines`;
-      transcriptHead.append(transcriptTitle, transcriptMeta);
-      body.appendChild(transcriptHead);
-
-      if (transcriptError && !transcriptLoading) {
-        const transcriptErrorLine = document.createElement('p');
-        transcriptErrorLine.className = 'unity-note';
-        transcriptErrorLine.textContent = transcriptError;
-        body.appendChild(transcriptErrorLine);
-      }
-
-      const transcriptWrap = document.createElement('div');
-      transcriptWrap.className = 'unity-transcript';
-      transcriptWrap.setAttribute('data-testid', 'unity-transcript-list');
-
-      const segments = getDisplayTranscriptSegments();
-      if (segments.length === 0) {
-        const emptyTranscript = document.createElement('p');
-        emptyTranscript.className = 'unity-empty';
-        emptyTranscript.textContent = transcriptLoading
-          ? 'Loading transcript from YouTube...'
-          : 'Transcript unavailable for this video.';
-        transcriptWrap.appendChild(emptyTranscript);
+        compose.append(composeInput, composeActions);
+        chatPanel.appendChild(compose);
+        body.appendChild(chatPanel);
+        input = composeInput;
       } else {
-        for (const segment of segments) {
-          const row = document.createElement('article');
-          row.className = 'unity-transcript-row';
-          row.setAttribute('data-testid', 'unity-transcript-row');
-          row.dataset.segmentId = segment.id;
-          row.dataset.current = String(segment.id === activeTranscriptSegmentId);
+        const transcriptPanel = document.createElement('section');
+        transcriptPanel.className = 'unity-tab-panel unity-tab-panel--transcript';
 
-          const tsButton = document.createElement('button');
-          tsButton.type = 'button';
-          tsButton.className = 'unity-ts-btn';
-          tsButton.textContent = segment.startLabel;
-          tsButton.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            seekVideo(segment.startSec);
-          });
-
-          const textNode = document.createElement('p');
-          textNode.className = 'unity-transcript-text';
-          textNode.textContent = segment.text;
-          textNode.addEventListener('click', (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            seekVideo(segment.startSec);
-          });
-
-          row.append(tsButton, textNode);
-          transcriptWrap.appendChild(row);
+        if (report?.transcript?.unavailableReason && !transcriptLoading) {
+          const transcriptWarning = document.createElement('p');
+          transcriptWarning.className = 'unity-note';
+          transcriptWarning.textContent = `Transcript note: ${report.transcript.unavailableReason}`;
+          transcriptPanel.appendChild(transcriptWarning);
         }
-      }
 
-      body.appendChild(transcriptWrap);
+        const transcriptHead = document.createElement('div');
+        transcriptHead.className = 'unity-transcript-head';
+        const transcriptMeta = document.createElement('p');
+        transcriptMeta.className = 'unity-transcript-meta';
+        transcriptMeta.textContent = transcriptLoading
+          ? 'Loading...'
+          : `${getDisplayTranscriptSegments().length} lines`;
+        transcriptHead.append(transcriptMeta);
+        transcriptPanel.appendChild(transcriptHead);
+
+        if (transcriptError && !transcriptLoading) {
+          const transcriptErrorLine = document.createElement('p');
+          transcriptErrorLine.className = 'unity-note';
+          transcriptErrorLine.textContent = transcriptError;
+          transcriptPanel.appendChild(transcriptErrorLine);
+        }
+
+        const transcriptWrap = document.createElement('div');
+        transcriptWrap.className = 'unity-transcript';
+        transcriptWrap.setAttribute('data-testid', 'unity-transcript-list');
+
+        const segments = getDisplayTranscriptSegments();
+        if (segments.length === 0) {
+          const emptyTranscript = document.createElement('p');
+          emptyTranscript.className = 'unity-empty';
+          emptyTranscript.textContent = transcriptLoading
+            ? 'Loading transcript from YouTube...'
+            : 'Transcript unavailable for this video.';
+          transcriptWrap.appendChild(emptyTranscript);
+        } else {
+          for (const segment of segments) {
+            const row = document.createElement('article');
+            row.className = 'unity-transcript-row';
+            row.setAttribute('data-testid', 'unity-transcript-row');
+            row.dataset.segmentId = segment.id;
+            row.dataset.current = String(segment.id === activeTranscriptSegmentId);
+
+            const tsButton = document.createElement('button');
+            tsButton.type = 'button';
+            tsButton.className = 'unity-ts-btn';
+            tsButton.textContent = segment.startLabel;
+            tsButton.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              seekVideo(segment.startSec);
+            });
+
+            const textNode = document.createElement('p');
+            textNode.className = 'unity-transcript-text';
+            textNode.textContent = segment.text;
+            textNode.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              seekVideo(segment.startSec);
+            });
+
+            row.append(tsButton, textNode);
+            transcriptWrap.appendChild(row);
+          }
+        }
+
+        transcriptPanel.appendChild(transcriptWrap);
+        body.appendChild(transcriptPanel);
+      }
 
       if (localError) {
         const error = document.createElement('p');
@@ -1354,7 +1567,7 @@ export default defineContentScript({
 
       panelRoot.append(head, body);
 
-      if (shouldRestoreComposerFocus) {
+      if (shouldRestoreComposerFocus && input) {
         const max = input.value.length;
         const start = Math.max(0, Math.min(restoreStart, max));
         const end = Math.max(start, Math.min(restoreEnd, max));
@@ -1370,9 +1583,37 @@ export default defineContentScript({
 
     const applyEmbeddedResponse = (response: EmbeddedStateResponse) => {
       tabId = response.tabId ?? tabId;
-      status = response.status ?? status;
-      report = response.report ?? report;
-      session = response.session ?? session;
+      const currentUrl = location.href;
+      const currentVideoId = getVideoIdFromUrl(currentUrl);
+
+      const nextReport = response.report;
+      const reportMatchesCurrentUrl = nextReport
+        ? urlsRepresentSameResource(
+          nextReport.url,
+          currentUrl,
+          nextReport.videoId ?? null,
+          currentVideoId,
+        )
+        : false;
+
+      const nextSession = response.session;
+      const sessionMatchesCurrentUrl = nextSession
+        ? urlsRepresentSameResource(nextSession.url, currentUrl, undefined, currentVideoId)
+        : false;
+
+      if ((nextReport && !reportMatchesCurrentUrl) || (nextSession && !sessionMatchesCurrentUrl)) {
+        status = {
+          state: 'idle',
+          progress: 0,
+          message: isWatchUrl(currentUrl) ? 'Ready to scan this video.' : 'Ready to scan this tab.',
+          updatedAt: Date.now(),
+        };
+      } else {
+        status = response.status ?? status;
+      }
+
+      report = reportMatchesCurrentUrl ? nextReport : null;
+      session = sessionMatchesCurrentUrl ? nextSession : null;
 
       if (report?.transcript?.segments?.length) {
         transcriptSegments = report.transcript.segments;
